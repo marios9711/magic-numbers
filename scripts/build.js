@@ -11,10 +11,40 @@ for (const f of files) for (const r of readJSON(path.join(dir, f), { rows: [] })
 const { results, hist } = evaluate([...byId.values()]);
 const now = Date.now() / 1000;
 
+const odds = readJSON(path.join(ROOT, 'data/odds.json'), {});
+const withOdds = x => { const o = odds[x.id]; if (o && o.m && Object.keys(o.m).length) { x.od = o.m; x.bm = o.bm; } return x; };
 const upcoming = results
   .filter(x => !x.outcome && x.row.ts > now - 3 * 3600 && x.row.ts < now + 2 * 864e2)
-  .map(slim);
-const settled = results.filter(x => x.outcome && x.pred).map(slim).reverse().slice(0, 1000);
+  .map(slim).map(withOdds);
+const settledAll = results.filter(x => x.outcome && x.pred).map(slim).map(withOdds);
+const settled = settledAll.slice().reverse().slice(0, 1000);
+
+// Paper betting: a pretend €10 stake on each market, at the odds recorded before kick-off.
+const STAKE = 10;
+const hitM = (m, o) => ({ '1': o === 'H', X: o === 'D', '2': o === 'A', '1X': o !== 'A', X2: o !== 'H', '12': o !== 'D' })[m];
+const MK = {
+  pick: x => x.p.pick,
+  dc: x => x.p.dc,
+  underdog: x => x.p.ud,
+  home: () => '1',
+  favourite: x => ['1', 'X', '2'].filter(k => x.od[k]).sort((a, b) => x.od[a] - x.od[b])[0],
+};
+const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
+for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+const cum = Object.fromEntries(Object.keys(MK).map(k => [k, 0]));
+const days = new Map();
+for (const x of settledAll.filter(x => x.od).sort((a, b) => a.ts - b.ts)) {
+  for (const k in MK) {
+    const m = MK[k](x), odd = m && x.od[m];
+    if (!odd) continue;
+    const pr = hitM(m, x.o) ? STAKE * (odd - 1) : -STAKE;
+    const a = paper.markets[k]; a.bets++; if (pr > 0) a.won++; a.profit += pr; cum[k] += pr;
+    if (k === 'pick') { const l = (paper.byLeague[x.lg] ||= { bets: 0, won: 0, profit: 0 }); l.bets++; if (pr > 0) l.won++; l.profit += pr; }
+  }
+  days.set(new Date(x.ts * 1000).toISOString().slice(0, 10), { ...cum });
+}
+paper.timeline = [...days].map(([d, v]) => ({ d, ...Object.fromEntries(Object.entries(v).map(([k, n]) => [k, Math.round(n * 100) / 100])) }));
+for (const g of [paper.markets, paper.byLeague]) for (const k in g) g[k].profit = Math.round(g[k].profit * 100) / 100;
 
 const ready = [...hist.values()].filter(h => h.length >= 7).length;
 const S = stats(results);
@@ -29,6 +59,7 @@ S.meta = {
   upcomingTotal: results.filter(x => !x.outcome && x.row.ts > now - 3 * 3600).length,
   upcomingPredicted: upcoming.filter(x => x.p).length,
 };
+S.paper = paper;
 
 // Team list for the calculator: name, latest competition, last 8 results (oldest -> newest).
 const info = new Map();
