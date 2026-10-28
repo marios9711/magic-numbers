@@ -1,0 +1,35 @@
+name: Backtest past seasons
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 10 * * *'  # daily until every league-season is downloaded; then it only recomputes
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Download missing seasons and run backtest
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+          MAX_CALLS: '80'
+        run: node scripts/backtest.js
+      - name: Save
+        run: |
+          git config user.name "magic-numbers-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data docs/data
+          git diff --cached --quiet || git commit -m "Backtest update $(date -u +%F)"
+          git pull --rebase
+          git push
