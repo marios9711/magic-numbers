@@ -23,7 +23,7 @@ jobs:
       - name: Download missing seasons and run backtest
         env:
           APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
-          MAX_CALLS: '80'
+          MAX_CALLS: '60'
         run: node scripts/backtest.js
       - name: Save
         run: |
