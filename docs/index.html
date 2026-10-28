@@ -49,6 +49,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .calc .slot.W{background:var(--win)}.calc .slot.D{background:var(--draw)}.calc .slot.L{background:var(--loss)}
 .note{font-size:13px;color:var(--mute)}
 .hide{display:none}
+.tn{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.tn input{flex:1;min-width:180px}
 @media (max-width:560px){.m{grid-template-columns:44px 1fr}.badges{grid-column:1/-1;justify-content:flex-start}}
 </style>
 </head>
@@ -82,9 +83,10 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
   <section id="backtest" class="hide"><div id="btBody"></div></section>
   <section id="calc" class="hide">
     <div class="card calc">
-      <p class="note">Click each box to cycle Win → Draw → Loss. Oldest result on the left, most recent on the right (all competitions, 8 matches).</p>
-      <div><b>Home team</b></div><div class="row" id="ch"></div>
-      <div><b>Away team</b></div><div class="row" id="ca"></div>
+      <p class="note">Type a team name: if it is in the collected data, its known results fill in automatically. Click any box to cycle Win → Draw → Loss. Oldest result on the left, most recent on the right (all competitions, 8 matches).</p>
+      <label class="tn"><b>Home team</b><input id="nh" list="teamList" placeholder="Home team name" autocomplete="off"></label><div class="note" id="sh"></div><div class="row" id="ch"></div>
+      <label class="tn"><b>Away team</b><input id="na" list="teamList" placeholder="Away team name" autocomplete="off"></label><div class="note" id="sa"></div><div class="row" id="ca"></div>
+      <datalist id="teamList"></datalist>
       <div id="calcOut"></div>
     </div>
   </section>
@@ -203,20 +205,39 @@ function warm(m) {
 }
 
 // Calculator
-const calc = { h: 'WDLWWDLW'.split(''), a: 'LLDWLDDL'.split('') };
+const calc = { h: 'WDLWWDLW'.split(''), a: 'LLDWLDDL'.split(''), home: {} };
+const TEAMS = new Map();
+function pickTeam(s) {
+  const v = $('#n' + s).value.trim(), t = TEAMS.get(v.toLowerCase());
+  calc.home[s] = null;
+  if (!t) { $('#s' + s).textContent = v ? 'Not in the collected data yet — enter results by hand.' : ''; drawCalc(); return; }
+  const r = t.r.split(''), hm = t.h.split('');
+  calc[s] = [...calc[s].slice(0, 8 - r.length), ...r];
+  calc.home[s] = [...Array(8 - hm.length).fill('0').map((_, i) => (i % 2 ? '0' : '1')), ...hm].join('');
+  $('#s' + s).textContent = `${t.l}: ${r.length} of 8 results filled from collected data` + (r.length < 8 ? ' — set the older ones by hand.' : '.');
+  drawCalc();
+}
 function drawCalc() {
   for (const s of ['h', 'a']) $('#c' + s).innerHTML = calc[s].map((r, i) => `<button class="slot ${r}" data-s="${s}" data-i="${i}">${r}</button>`).join('');
   document.querySelectorAll('.slot').forEach(b => b.onclick = () => { const s = b.dataset.s, i = +b.dataset.i; calc[s][i] = { W: 'D', D: 'L', L: 'W' }[calc[s][i]]; drawCalc(); });
-  const mk = arr => arr.map((r, i) => ({ r, home: i % 2 === 0 }));
-  const p = Engine.predict(mk(calc.h), mk(calc.a));
-  $('#calcOut').innerHTML = `<div class="badges" style="justify-content:flex-start;margin:10px 0"><span class="b pick">Pick ${p.pickLabel}</span><span class="b">DC ${p.doubleChance}</span>${p.underdog ? `<span class="b">Underdog ${p.underdog}</span>` : ''}<span class="b">${p.confidence}</span></div>
+  const mk = (arr, s) => arr.map((r, i) => ({ r, home: calc.home[s] ? calc.home[s][i] === '1' : i % 2 === 0 }));
+  const p = Engine.predict(mk(calc.h, 'h'), mk(calc.a, 'a'));
+  const hn = $('#nh').value.trim() || 'Home team', an = $('#na').value.trim() || 'Away team';
+  const say = { '1': `${hn} to win`, 'X': 'Draw', '2': `${an} to win`, '1X': `${hn} not to lose`, 'X2': `${an} not to lose`, '12': 'No draw' };
+  $('#calcOut').innerHTML = `<div style="margin:14px 0 4px;font-size:17px"><b>${esc(hn)}</b> v <b>${esc(an)}</b></div>
+   <div style="margin-bottom:6px">Prediction: <b>${esc(say[p.pickLabel])}</b> (${p.pickLabel}) · Double chance: ${esc(say[p.doubleChance])}${p.underdog ? ` · Book’s underdog bet: <b>${esc(say[p.underdog])}</b>` : ''}</div>
+   <div class="badges" style="justify-content:flex-start;margin:10px 0"><span class="b pick">Pick ${p.pickLabel}</span><span class="b">DC ${p.doubleChance}</span>${p.underdog ? `<span class="b">Underdog ${p.underdog}</span>` : ''}<span class="b">${p.confidence}</span></div>
    <div class="note">Home 6: ${p.forms.h.f6} · 7: ${p.forms.h.f7} — Away 6: ${p.forms.a.f6} · 7: ${p.forms.a.f7} — Scores 1: ${p.scores.H.toFixed(1)} · X: ${p.scores.D.toFixed(1)} · 2: ${p.scores.A.toFixed(1)}</div>
    <ul class="note">${p.rules.map(r => `<li>${esc(r.text)}</li>`).join('')}</ul>`;
 }
 drawCalc();
 
 (async () => {
-  [DATA.upcoming, DATA.settled, DATA.stats, DATA.backtest] = await Promise.all(['upcoming', 'settled', 'stats', 'backtest'].map(load));
+  [DATA.upcoming, DATA.settled, DATA.stats, DATA.backtest, DATA.teams] = await Promise.all(['upcoming', 'settled', 'stats', 'backtest', 'teams'].map(load));
+  for (const t of DATA.teams || []) { const k = t.n.toLowerCase(); if (!TEAMS.has(k) || t.r.length > TEAMS.get(k).r.length) TEAMS.set(k, t); }
+  $('#teamList').innerHTML = [...TEAMS.values()].map(t => `<option value="${esc(t.n)}">${esc(t.l)}</option>`).join('');
+  ['h', 'a'].forEach(s => $('#n' + s).addEventListener('change', () => pickTeam(s)));
+  ['h', 'a'].forEach(s => $('#n' + s).addEventListener('input', drawCalc));
   const m = DATA.stats && DATA.stats.meta;
   $('#meta').textContent = m ? `Updated ${new Date(m.updated).toLocaleString()} · ${m.upcomingPredicted} of ${m.upcomingTotal} upcoming fixtures predicted` : 'Waiting for the first daily update.';
   renderUpcoming(); renderResults();
