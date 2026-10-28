@@ -1,0 +1,177 @@
+{
+ "backtestSeasons": [
+  2022,
+  2023,
+  2024
+ ],
+ "backtestLeagues": [
+  {
+   "id": 39,
+   "name": "England Premier League"
+  },
+  {
+   "id": 40,
+   "name": "England Championship"
+  },
+  {
+   "id": 41,
+   "name": "England League One"
+  },
+  {
+   "id": 140,
+   "name": "Spain La Liga"
+  },
+  {
+   "id": 141,
+   "name": "Spain Segunda"
+  },
+  {
+   "id": 135,
+   "name": "Italy Serie A"
+  },
+  {
+   "id": 136,
+   "name": "Italy Serie B"
+  },
+  {
+   "id": 78,
+   "name": "Germany Bundesliga"
+  },
+  {
+   "id": 79,
+   "name": "Germany 2. Bundesliga"
+  },
+  {
+   "id": 61,
+   "name": "France Ligue 1"
+  },
+  {
+   "id": 62,
+   "name": "France Ligue 2"
+  },
+  {
+   "id": 88,
+   "name": "Netherlands Eredivisie"
+  },
+  {
+   "id": 94,
+   "name": "Portugal Primeira Liga"
+  },
+  {
+   "id": 197,
+   "name": "Greece Super League"
+  },
+  {
+   "id": 318,
+   "name": "Cyprus 1st Division"
+  },
+  {
+   "id": 203,
+   "name": "Turkey Super Lig"
+  },
+  {
+   "id": 144,
+   "name": "Belgium Pro League"
+  },
+  {
+   "id": 179,
+   "name": "Scotland Premiership"
+  },
+  {
+   "id": 218,
+   "name": "Austria Bundesliga"
+  },
+  {
+   "id": 207,
+   "name": "Switzerland Super League"
+  },
+  {
+   "id": 119,
+   "name": "Denmark Superliga"
+  },
+  {
+   "id": 113,
+   "name": "Sweden Allsvenskan"
+  },
+  {
+   "id": 103,
+   "name": "Norway Eliteserien"
+  },
+  {
+   "id": 106,
+   "name": "Poland Ekstraklasa"
+  },
+  {
+   "id": 345,
+   "name": "Czech First League"
+  },
+  {
+   "id": 283,
+   "name": "Romania Liga I"
+  },
+  {
+   "id": 210,
+   "name": "Croatia HNL"
+  },
+  {
+   "id": 286,
+   "name": "Serbia Super Liga"
+  },
+  {
+   "id": 333,
+   "name": "Ukraine Premier League"
+  },
+  {
+   "id": 235,
+   "name": "Russia Premier League"
+  },
+  {
+   "id": 271,
+   "name": "Hungary NB I"
+  },
+  {
+   "id": 172,
+   "name": "Bulgaria First League"
+  },
+  {
+   "id": 71,
+   "name": "Brazil Serie A"
+  },
+  {
+   "id": 128,
+   "name": "Argentina Liga Profesional"
+  },
+  {
+   "id": 253,
+   "name": "USA MLS"
+  },
+  {
+   "id": 262,
+   "name": "Mexico Liga MX"
+  },
+  {
+   "id": 98,
+   "name": "Japan J1 League"
+  },
+  {
+   "id": 292,
+   "name": "South Korea K League 1"
+  },
+  {
+   "id": 307,
+   "name": "Saudi Pro League"
+  },
+  {
+   "id": 188,
+   "name": "Australia A-League"
+  },
+  {
+   "id": 239,
+   "name": "Colombia Primera A"
+  },
+  {
+   "id": 265,
+   "name": "Chile Primera Division"
+  }
+ ]
+}
