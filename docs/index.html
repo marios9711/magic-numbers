@@ -62,6 +62,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
   <button data-t="upcoming" class="on">Upcoming</button>
   <button data-t="results">Results</button>
   <button data-t="perf">Live performance</button>
+  <button data-t="paper">Paper betting</button>
   <button data-t="backtest">Backtest 2022–24</button>
   <button data-t="calc">Calculator</button>
   <button data-t="method">Method</button>
@@ -80,6 +81,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
     <div id="resList"></div>
   </section>
   <section id="perf" class="hide"><div id="perfBody"></div></section>
+  <section id="paper" class="hide"><div id="paperBody"></div></section>
   <section id="backtest" class="hide"><div id="btBody"></div></section>
   <section id="calc" class="hide">
     <div class="card calc">
@@ -133,11 +135,13 @@ function matchRow(x, settled) {
   if (p) {
     const mk = (m, cls = '', pre = '') => {
       if (!settled) return `<span class="b ${cls}">${pre}${m}</span>`;
-      const ok = Engine.hit(m, x.o);
+      const ok = Engine.hit(String(m).split(' ')[0], x.o);
       return `<span class="b ${cls} ${ok ? 'ok' : 'no'}">${pre}${m} ${ok ? '✓' : '✗'}</span>`;
     };
-    badges = mk(p.pick, 'pick', 'Pick ') + `<span class="b">DC ${p.dc}</span>` + (p.ud ? mk(p.ud, '', 'Underdog ') : '') + `<span class="b">${p.conf}</span>`;
+    const at = m => (x.od && x.od[m] ? ` @${x.od[m].toFixed(2)}` : '');
+    badges = mk(p.pick + at(p.pick), 'pick', 'Pick ') + `<span class="b">DC ${p.dc}${at(p.dc)}</span>` + (p.ud ? mk(p.ud + at(p.ud), '', 'Underdog ') : '') + `<span class="b">${p.conf}</span>`;
     if (settled) badges = mk(p.pick, 'pick', 'Pick ') + (p.ud ? mk(p.ud, '', 'Underdog ') : '') + mk(p.dc, '', 'DC ');
+    if (x.od) badges += `<span class="b" title="${esc(x.bm || '')} odds">odds ${['1', 'X', '2'].map(k => x.od[k] ? x.od[k].toFixed(2) : '–').join(' / ')}</span>`;
   } else badges = '<span class="b">not enough history</span>';
   const score = settled ? `<span class="sc">${x.hg}–${x.ag}</span>` : ' v ';
   const det = p ? `<div class="det">${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
@@ -173,7 +177,8 @@ function kpi(label, a, base, baseLabel) {
     <div class="c">${a.hit}/${a.n} correct${base ? ` · baseline ${baseLabel}: ${pct(base.hit, base.n)}` : ''}</div></div>`;
 }
 function table(title, obj, cols, minN = 1) {
-  const rows = Object.entries(obj || {}).filter(([, v]) => v.n >= minN).sort((a, b) => b[1].n - a[1].n);
+  const N = v => v.n ?? v.bets;
+  const rows = Object.entries(obj || {}).filter(([, v]) => N(v) >= minN).sort((a, b) => N(b[1]) - N(a[1]));
   if (!rows.length) return '';
   return `<div class="card"><h3 style="margin:0 0 6px">${title}</h3><table><tr>${cols.map(c => `<th>${c[0]}</th>`).join('')}</tr>${rows.map(([k, v]) => `<tr>${cols.map(c => c[1](k, v)).join('')}</tr>`).join('')}</table></div>`;
 }
@@ -198,6 +203,34 @@ function renderStats(S, el, live) {
     table('By confidence', S.byConfidence, [['Level', k => `<td>${k}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
     table('By rule (when the rule fired, did its favoured result happen?)', S.byRule, [['Rule', k => `<td>${RULE[k] || k}</td>`], ['Times', (k, v) => `<td class="n">${v.n}</td>`], ['Correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
     table('By league (10+ matches)', S.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['Underdog', (k, v) => `<td class="n">${pct(v.udHit, v.ud)}</td>`], ['DC', (k, v) => `<td class="n">${pct(v.dc, v.n)}</td>`]], 10);
+}
+const PM = { pick: ['Book’s pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
+const eur = n => (n < 0 ? '−€' : '+€') + Math.abs(n).toFixed(2);
+function renderPaper(S, el) {
+  const P = S && S.paper;
+  if (!P || !P.markets.pick.bets) {
+    el.innerHTML = `<div class="card empty">No paper bets settled yet.<br><span class="note">Every predicted match gets bookmaker odds recorded before kick-off, and a pretend €10 stake on each bet type. Results start once predictions appear after the warm-up.</span></div>`;
+    return;
+  }
+  const cards = Object.entries(PM).map(([k, [label, kind]]) => {
+    const a = P.markets[k], roi = a.bets ? 100 * a.profit / (a.bets * P.stake) : 0;
+    return `<div class="card kpi"><div class="l">${label}${kind === 'baseline' ? ' <span class="b">comparison</span>' : ''}</div>
+      <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
+      <div class="c">${a.bets} bets · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div></div>`;
+  }).join('');
+  el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets.</div>
+    <div class="grid">${cards}</div>${chart(P.timeline)}` +
+    table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
+}
+function chart(tl) {
+  if (!tl || tl.length < 2) return '';
+  const keys = ['pick', 'underdog', 'home'], col = { pick: 'var(--acc)', underdog: 'var(--draw)', home: 'var(--mute)' };
+  const W = 600, H = 180, all = tl.flatMap(t => keys.map(k => t[k])), lo = Math.min(0, ...all), hi = Math.max(0, ...all), span = hi - lo || 1;
+  const X = i => 30 + (W - 40) * i / (tl.length - 1), Y = v => 10 + (H - 30) * (hi - v) / span;
+  const lines = keys.map(k => `<polyline fill="none" stroke="${col[k]}" stroke-width="2" points="${tl.map((t, i) => `${X(i).toFixed(1)},${Y(t[k]).toFixed(1)}`).join(' ')}"/>`).join('');
+  return `<div class="card"><h3 style="margin:0 0 6px">Running balance</h3><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
+    <line x1="30" x2="${W - 10}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line)"/><text x="0" y="${Y(0) + 4}" font-size="11" fill="var(--mute)">€0</text>${lines}</svg>
+    <div class="note">${keys.map(k => `<span style="color:${col[k]}">■</span> ${PM[k][0]}`).join(' &nbsp; ')}</div></div>`;
 }
 function warm(m) {
   if (!m) return '';
@@ -243,6 +276,7 @@ drawCalc();
   renderUpcoming(); renderResults();
   renderStats(DATA.stats, $('#perfBody'), true);
   renderStats(DATA.backtest, $('#btBody'), false);
+  renderPaper(DATA.stats, $('#paperBody'));
   ['q', 'conf', 'only'].forEach(id => $('#' + id).addEventListener('input', renderUpcoming));
   $('#q2').addEventListener('input', renderResults);
 })();
