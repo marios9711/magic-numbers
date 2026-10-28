@@ -7,6 +7,7 @@ const path = require('path');
 const { ROOT, api, compact, readJSON, writeJSON, evaluate, stats } = require('./lib');
 
 const MAX_CALLS = Number(process.env.MAX_CALLS || 80);
+const sleep = ms => new Promise(r => setTimeout(r, ms)); // free plan: max 10 requests per minute
 const cfg = readJSON(path.join(ROOT, 'config.json'), {});
 const leagues = cfg.backtestLeagues || [];
 const seasons = cfg.backtestSeasons || [2022, 2023, 2024];
@@ -17,6 +18,7 @@ const seasons = cfg.backtestSeasons || [2022, 2023, 2024];
     const p = path.join(ROOT, 'data/seasons', `${L.id}-${y}.json`);
     if (fs.existsSync(p) || calls >= MAX_CALLS) continue;
     try {
+      if (calls) await sleep(6500);
       calls++;
       const rows = (await api(`/fixtures?league=${L.id}&season=${y}`)).map(compact);
       writeJSON(p, { league: L.id, season: y, rows });
