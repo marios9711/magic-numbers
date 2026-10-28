@@ -27,6 +27,13 @@ jobs:
         run: node scripts/collect.js
       - name: Build predictions and stats
         run: node scripts/build.js
+      - name: Record bookmaker odds for predicted matches (paper betting)
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+          ODDS_MAX: '20'
+        run: node scripts/odds.js
+      - name: Rebuild with odds
+        run: node scripts/build.js
       - name: Save
         run: |
           git config user.name "magic-numbers-bot"
