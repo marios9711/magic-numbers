@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magic Numbers Predictions</title>
+<meta name="robots" content="noindex">
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e4e2dc;--acc:#1f5f4a;--win:#2e7d4f;--draw:#b8860b;--loss:#b3402f;--chip:#eeece6}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecebe6;--mute:#9b9a94;--line:#2f2f2c;--acc:#6cc3a0;--win:#5cbf86;--draw:#e0b341;--loss:#e07a68;--chip:#2a2a27}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{padding:20px 16px 0;max-width:1000px;margin:0 auto}
+h1{font-size:22px;margin:0 0 2px}
+.sub{color:var(--mute);font-size:13px}
+nav{display:flex;gap:4px;overflow-x:auto;padding:14px 16px 0;max-width:1000px;margin:0 auto;border-bottom:1px solid var(--line)}
+nav button{background:none;border:0;padding:8px 12px;font:inherit;color:var(--mute);border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap}
+nav button.on{color:var(--ink);border-color:var(--acc);font-weight:600}
+main{max-width:1000px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:12px}
+.kpi .v{font-size:26px;font-weight:700}.kpi .l{color:var(--mute);font-size:13px}.kpi .c{font-size:12px;color:var(--mute);margin-top:4px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+input,select{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+input[type=search]{flex:1;min-width:160px}
+.lg{font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.03em;margin:16px 0 6px}
+.m{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-top:1px solid var(--line);cursor:pointer}
+.m:first-child{border-top:0}
+.t{color:var(--mute);font-size:13px}
+.teams b{font-weight:600}.teams .sc{font-weight:700;margin:0 6px}
+.badges{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.b{font-size:12px;padding:2px 7px;border-radius:999px;background:var(--chip);white-space:nowrap}
+.b.pick{background:var(--acc);color:#fff;font-weight:700}
+.b.ok{background:var(--win);color:#fff}.b.no{background:var(--loss);color:#fff}
+.conf-high{outline:2px solid var(--acc)}.conf-low{opacity:.75}
+.det{grid-column:1/-1;font-size:13px;color:var(--mute);display:none;padding-top:4px}
+.m.open .det{display:block}
+.det ul{margin:6px 0 0;padding-left:18px}
+.seq{display:inline-flex;gap:2px;vertical-align:middle}
+.seq i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.W{background:var(--win)}.D{background:var(--draw)}.L{background:var(--loss)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:7px 6px;border-top:1px solid var(--line)}th{color:var(--mute);font-weight:500;font-size:12px}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:6px;background:var(--chip);border-radius:3px;overflow:hidden;min-width:60px}.bar i{display:block;height:100%;background:var(--acc)}
+.empty{color:var(--mute);text-align:center;padding:30px}
+.calc .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.calc .slot{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--chip);font-weight:700;cursor:pointer;color:#fff}
+.calc .slot.W{background:var(--win)}.calc .slot.D{background:var(--draw)}.calc .slot.L{background:var(--loss)}
+.note{font-size:13px;color:var(--mute)}
+.hide{display:none}
+@media (max-width:560px){.m{grid-template-columns:44px 1fr}.badges{grid-column:1/-1;justify-content:flex-start}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Magic Numbers Predictions</h1>
+  <div class="sub" id="meta">Loading…</div>
+</header>
+<nav id="tabs">
+  <button data-t="upcoming" class="on">Upcoming</button>
+  <button data-t="results">Results</button>
+  <button data-t="perf">Live performance</button>
+  <button data-t="backtest">Backtest 2022–24</button>
+  <button data-t="calc">Calculator</button>
+  <button data-t="method">Method</button>
+</nav>
+<main>
+  <section id="upcoming">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search team or league">
+      <select id="conf"><option value="">All confidence</option><option value="high">High only</option><option value="medium">Medium +</option></select>
+      <select id="only"><option value="p">Predicted only</option><option value="all">All fixtures</option></select>
+    </div>
+    <div id="upList"></div>
+  </section>
+  <section id="results" class="hide">
+    <div class="toolbar"><input type="search" id="q2" placeholder="Search team or league"></div>
+    <div id="resList"></div>
+  </section>
+  <section id="perf" class="hide"><div id="perfBody"></div></section>
+  <section id="backtest" class="hide"><div id="btBody"></div></section>
+  <section id="calc" class="hide">
+    <div class="card calc">
+      <p class="note">Click each box to cycle Win → Draw → Loss. Oldest result on the left, most recent on the right (all competitions, 8 matches).</p>
+      <div><b>Home team</b></div><div class="row" id="ch"></div>
+      <div><b>Away team</b></div><div class="row" id="ca"></div>
+      <div id="calcOut"></div>
+    </div>
+  </section>
+  <section id="method" class="hide">
+    <div class="card">
+      <h3>How predictions are made</h3>
+      <p>Each team's form is its most recent results in <b>all competitions</b> (friendlies excluded), using windows of 5, 6, 7 and 8 matches. A team needs at least 7 recorded matches before it is predicted. Every rule below adds weight to home win (1), draw (X) or away win (2); the highest total is the pick.</p>
+      <ul>
+        <li><b>Balance</b> (pp. 46–48): the result that makes the two 6-match forms, plus this match, as equal as possible.</li>
+        <li><b>Common zero</b> (p. 47): if neither team has drawn in 6, the draw fills the gap.</li>
+        <li><b>Trailing team</b> (pp. 79–81): the side with fewer positive results (wins + draws) over 7 does not lose; stronger when the 5-match form confirms it and at home. This is the book's main bet, shown as “Underdog”.</li>
+        <li><b>Unbeaten 7 vs one loss</b> (p. 81): a side unbeaten in 7 facing a side with exactly one loss in 7 tends to lose.</li>
+        <li><b>Six wins in a row</b> (p. 68): struggles to win again. <b>Six defeats</b> (p. 69): hard to beat by a moderate opponent.</li>
+        <li><b>Special forms</b>: home side at 1-1-4 doesn't lose to weaker form (p. 67); 4-1-1 gives up points only to equal or better form (p. 68); 1-2-3 is ready for a 4th loss, 2-1-3 is very hard to beat (p. 70).</li>
+        <li><b>Back home</b> (p. 70): three straight losses, then a home game → bounce back.</li>
+        <li><b>Golden sequence</b> (pp. 59–60): results that complete a 4-2-1 form over 7 get a small boost.</li>
+      </ul>
+      <p class="note">These rules are an interpretation of the book's text; the book does not give exact weights. Results are judged on the 90-minute score. Predictions are computed only from matches played before kick-off, so the record cannot see the future. This is a research tool, not betting advice.</p>
+    </div>
+  </section>
+</main>
+<script src="engine.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct = (h, n) => n ? (100 * h / n).toFixed(1) + '%' : '–';
+const DATA = {};
+async function load(name) { try { const r = await fetch('data/' + name + '.json?v=' + Date.now()); return r.ok ? r.json() : null; } catch { return null; } }
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.id !== b.dataset.t));
+  try { localStorage.setItem('tab', b.dataset.t); } catch {}
+});
+try { const t = localStorage.getItem('tab'); if (t) document.querySelector(`#tabs [data-t="${t}"]`)?.click(); } catch {}
+
+const time = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const dayLabel = ts => new Date(ts * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+const seq = s => `<span class="seq">${[...(s || '')].map(c => `<i class="${c}" title="${c}"></i>`).join('')}</span>`;
+
+function matchRow(x, settled) {
+  const p = x.p;
+  let badges = '';
+  if (p) {
+    const mk = (m, cls = '', pre = '') => {
+      if (!settled) return `<span class="b ${cls}">${pre}${m}</span>`;
+      const ok = Engine.hit(m, x.o);
+      return `<span class="b ${cls} ${ok ? 'ok' : 'no'}">${pre}${m} ${ok ? '✓' : '✗'}</span>`;
+    };
+    badges = mk(p.pick, 'pick', 'Pick ') + `<span class="b">DC ${p.dc}</span>` + (p.ud ? mk(p.ud, '', 'Underdog ') : '') + `<span class="b">${p.conf}</span>`;
+    if (settled) badges = mk(p.pick, 'pick', 'Pick ') + (p.ud ? mk(p.ud, '', 'Underdog ') : '') + mk(p.dc, '', 'DC ');
+  } else badges = '<span class="b">not enough history</span>';
+  const score = settled ? `<span class="sc">${x.hg}–${x.ag}</span>` : ' v ';
+  const det = p ? `<div class="det">${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
+    <div>Scores — 1: ${p.s.H} · X: ${p.s.D} · 2: ${p.s.A}</div><ul>${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
+  return `<div class="m ${p && !settled ? 'conf-' + p.conf : ''}" onclick="this.classList.toggle('open')">
+    <div class="t">${settled ? dayLabel(x.ts).split(' ').slice(1).join(' ') : time(x.ts)}</div>
+    <div class="teams"><b>${esc(x.hn)}</b>${score}<b>${esc(x.an)}</b><div class="t">${esc(x.lg)}</div></div>
+    <div class="badges">${badges}</div>${det}</div>`;
+}
+
+function renderUpcoming() {
+  const q = $('#q').value.toLowerCase(), conf = $('#conf').value, only = $('#only').value;
+  const rank = { high: 3, medium: 2, low: 1 };
+  let list = (DATA.upcoming || []).filter(x => (only === 'all' || x.p) &&
+    (!q || (x.hn + x.an + x.lg).toLowerCase().includes(q)) &&
+    (!conf || (x.p && rank[x.p.conf] >= rank[conf])));
+  list.sort((a, b) => a.ts - b.ts);
+  if (!list.length) { $('#upList').innerHTML = `<div class="card empty">${(DATA.upcoming || []).length ? 'No matches for this filter.' : 'No upcoming fixtures yet — the daily job fills this in.'}<br><span class="note">During the warm-up, teams need 7 recorded matches before they can be predicted.</span></div>`; return; }
+  let html = '', curDay = '';
+  const groups = [];
+  for (const x of list) { const d = dayLabel(x.ts); if (d !== curDay) { groups.push([d, []]); curDay = d; } groups[groups.length - 1][1].push(x); }
+  for (const [d, xs] of groups) html += `<div class="lg">${d} · ${xs.length}</div><div class="card" style="padding:0">${xs.map(x => matchRow(x, false)).join('')}</div>`;
+  $('#upList').innerHTML = html;
+}
+function renderResults() {
+  const q = $('#q2').value.toLowerCase();
+  const list = (DATA.settled || []).filter(x => !q || (x.hn + x.an + x.lg).toLowerCase().includes(q)).slice(0, 300);
+  $('#resList').innerHTML = list.length ? `<div class="card" style="padding:0">${list.map(x => matchRow(x, true)).join('')}</div>` : '<div class="card empty">No settled predictions yet.</div>';
+}
+
+function kpi(label, a, base, baseLabel) {
+  return `<div class="card kpi"><div class="l">${label}</div><div class="v">${pct(a.hit, a.n)}</div>
+    <div class="c">${a.hit}/${a.n} correct${base ? ` · baseline ${baseLabel}: ${pct(base.hit, base.n)}` : ''}</div></div>`;
+}
+function table(title, obj, cols, minN = 1) {
+  const rows = Object.entries(obj || {}).filter(([, v]) => v.n >= minN).sort((a, b) => b[1].n - a[1].n);
+  if (!rows.length) return '';
+  return `<div class="card"><h3 style="margin:0 0 6px">${title}</h3><table><tr>${cols.map(c => `<th>${c[0]}</th>`).join('')}</tr>${rows.map(([k, v]) => `<tr>${cols.map(c => c[1](k, v)).join('')}</tr>`).join('')}</table></div>`;
+}
+const barCell = (h, n) => `<td><div class="bar"><i style="width:${n ? 100 * h / n : 0}%"></i></div></td>`;
+const RULE = { balance: 'Balance', commonZero: 'Common zero', trailing: 'Trailing team', unbeaten7: 'Unbeaten 7 vs one loss', sixWins: 'Six wins in a row', sixLosses: 'Six defeats', home114: 'Home 1-1-4', form411: '4-1-1 form', form123: '1-2-3 form', form213: '2-1-3 form', backHome: 'Back home after 3 losses', golden: 'Golden 4-2-1' };
+
+function renderStats(S, el, live) {
+  if (!S || !S.graded) {
+    el.innerHTML = `<div class="card empty">${live ? 'No graded predictions yet. Results appear once predicted matches finish.' : 'The backtest has not run yet. It starts automatically after setup and needs about two days to download every season.'}</div>`;
+    if (live && S && S.meta) el.innerHTML += warm(S.meta);
+    return;
+  }
+  const o = S.outcomes, tot = o.H + o.D + o.A;
+  el.innerHTML = (live ? warm(S.meta) : `<div class="card note">${S.meta.leagueSeasons}/${S.meta.planned} league-seasons downloaded. ${S.meta.note}</div>`) +
+    `<div class="grid">
+      ${kpi('Pick (1 / X / 2)', S.pick, S.baseHome, 'always home win')}
+      ${kpi('Underdog not to lose (book’s main bet)', S.underdog, S.baseHomeOrDraw, 'always 1X')}
+      ${kpi('Double chance', S.doubleChance, S.baseHomeOrDraw, 'always 1X')}
+      ${kpi('Form favourite wins (baseline)', S.baseFormFav)}
+    </div>
+    <div class="card note">Actual results in this sample: home ${pct(o.H, tot)}, draw ${pct(o.D, tot)}, away ${pct(o.A, tot)}. The method only adds value where it beats the baselines.</div>` +
+    table('By confidence', S.byConfidence, [['Level', k => `<td>${k}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
+    table('By rule (when the rule fired, did its favoured result happen?)', S.byRule, [['Rule', k => `<td>${RULE[k] || k}</td>`], ['Times', (k, v) => `<td class="n">${v.n}</td>`], ['Correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
+    table('By league (10+ matches)', S.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['Underdog', (k, v) => `<td class="n">${pct(v.udHit, v.ud)}</td>`], ['DC', (k, v) => `<td class="n">${pct(v.dc, v.n)}</td>`]], 10);
+}
+function warm(m) {
+  if (!m) return '';
+  return `<div class="card note">Collected ${m.daysCollected} days (${m.firstDay} → ${m.lastDay}), ${m.fixtures.toLocaleString()} fixtures. Teams with enough history: <b>${m.teamsReady.toLocaleString()}</b> of ${m.teams.toLocaleString()}.</div>`;
+}
+
+// Calculator
+const calc = { h: 'WDLWWDLW'.split(''), a: 'LLDWLDDL'.split('') };
+function drawCalc() {
+  for (const s of ['h', 'a']) $('#c' + s).innerHTML = calc[s].map((r, i) => `<button class="slot ${r}" data-s="${s}" data-i="${i}">${r}</button>`).join('');
+  document.querySelectorAll('.slot').forEach(b => b.onclick = () => { const s = b.dataset.s, i = +b.dataset.i; calc[s][i] = { W: 'D', D: 'L', L: 'W' }[calc[s][i]]; drawCalc(); });
+  const mk = arr => arr.map((r, i) => ({ r, home: i % 2 === 0 }));
+  const p = Engine.predict(mk(calc.h), mk(calc.a));
+  $('#calcOut').innerHTML = `<div class="badges" style="justify-content:flex-start;margin:10px 0"><span class="b pick">Pick ${p.pickLabel}</span><span class="b">DC ${p.doubleChance}</span>${p.underdog ? `<span class="b">Underdog ${p.underdog}</span>` : ''}<span class="b">${p.confidence}</span></div>
+   <div class="note">Home 6: ${p.forms.h.f6} · 7: ${p.forms.h.f7} — Away 6: ${p.forms.a.f6} · 7: ${p.forms.a.f7} — Scores 1: ${p.scores.H.toFixed(1)} · X: ${p.scores.D.toFixed(1)} · 2: ${p.scores.A.toFixed(1)}</div>
+   <ul class="note">${p.rules.map(r => `<li>${esc(r.text)}</li>`).join('')}</ul>`;
+}
+drawCalc();
+
+(async () => {
+  [DATA.upcoming, DATA.settled, DATA.stats, DATA.backtest] = await Promise.all(['upcoming', 'settled', 'stats', 'backtest'].map(load));
+  const m = DATA.stats && DATA.stats.meta;
+  $('#meta').textContent = m ? `Updated ${new Date(m.updated).toLocaleString()} · ${m.upcomingPredicted} of ${m.upcomingTotal} upcoming fixtures predicted` : 'Waiting for the first daily update.';
+  renderUpcoming(); renderResults();
+  renderStats(DATA.stats, $('#perfBody'), true);
+  renderStats(DATA.backtest, $('#btBody'), false);
+  ['q', 'conf', 'only'].forEach(id => $('#' + id).addEventListener('input', renderUpcoming));
+  $('#q2').addEventListener('input', renderResults);
+})();
+</script>
+</body>
+</html>
