@@ -32,7 +32,7 @@ input[type=search]{flex:1;min-width:160px}
 .b{font-size:12px;padding:2px 7px;border-radius:999px;background:var(--chip);white-space:nowrap}
 .b.pick{background:var(--acc);color:#fff;font-weight:700}
 .b.ok{background:var(--win);color:#fff}.b.no{background:var(--loss);color:#fff}
-.conf-high{outline:2px solid var(--acc)}.conf-low{opacity:.75}
+.chosen{outline:2px solid var(--acc)}
 .det{grid-column:1/-1;font-size:13px;color:var(--mute);display:none;padding-top:4px}
 .m.open .det{display:block}
 .det ul{margin:6px 0 0;padding-left:18px}
@@ -167,6 +167,17 @@ function powerFair(odds) {
   for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (sum(mid) > 1) lo = mid; else hi = mid; }
   return q.map(v => v ** ((lo + hi) / 2));
 }
+let CHOSEN = null;
+function chosenTag(x) {
+  if (!CHOSEN) {
+    CHOSEN = new Map();
+    for (const d of (DATA.top3 && DATA.top3.days) || []) {
+      for (const c of d.picks || []) CHOSEN.set(`${c.ts}|${c.hn}|${c.an}`, 'Top 3');
+      for (const c of d.over || []) { const k = `${c.ts}|${c.hn}|${c.an}`; CHOSEN.set(k, CHOSEN.has(k) ? 'Top 3 + Over 2.5 daily 3' : 'Over 2.5 daily 3'); }
+    }
+  }
+  return CHOSEN.get(`${x.ts}|${x.hn}|${x.an}`) || '';
+}
 function matchRow(x, settled) {
   const p = x.p;
   let badges = '';
@@ -199,7 +210,11 @@ function matchRow(x, settled) {
   const rdet = x.r ? `<div>Ratings: 1 ${Math.round(x.r['1'] * 100)}% · X ${Math.round(x.r.X * 100)}% · 2 ${Math.round(x.r['2'] * 100)}% — expected goals ${x.r.lh.toFixed(2)}–${x.r.la.toFixed(2)}${x.od && x.od['1'] && x.od.X && x.od['2'] ? ` · bookmaker ${powerFair([x.od['1'], x.od.X, x.od['2']]).map(v => Math.round(100 * v) + '%').join(' / ')}` : ''}</div>` : '';
   const det = !p && (x.g || x.r) ? `<div class="det">${rdet}${gdet}</div>` : p ? `<div class="det">${rdet}${gdet}${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
     <div>Scores — 1: ${p.s.H} · X: ${p.s.D} · 2: ${p.s.A}</div><ul>${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
-  return `<div class="m ${p && !settled ? 'conf-' + p.conf : ''}" onclick="this.classList.toggle('open')">
+  // Green border = this match is in a Top 3 or the Over 2.5 daily 3 (not the book's confidence,
+  // which tested backwards: "high" was right less often than "low").
+  const tag = !settled && chosenTag(x);
+  if (tag) badges = `<span class="b pick">★ ${tag}</span>` + badges;
+  return `<div class="m ${tag ? 'chosen' : ''}" onclick="this.classList.toggle('open')">
     <div class="t">${settled ? dayLabel(x.ts).split(' ').slice(1).join(' ') : time(x.ts)}</div>
     <div class="teams"><b>${esc(x.hn)}</b>${score}<b>${esc(x.an)}</b><div class="t">${esc(x.lg)}</div></div>
     <div class="badges">${badges}</div>${det}</div>`;
