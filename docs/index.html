@@ -101,8 +101,8 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
       <p>Up to three selections per day, never more than one per match. Strong <b>Over 2.5 goals</b> selections come first (best value first; other goal lines are not used); any places left go to the <b>book’s 1 / X / 2 pick</b> with high or medium confidence, odds between 1.80 and 4.00, a bookmaker margin of 8% or less, and value according to the ratings model (its chance for that result × odds ≥ 1.05), best value first. If nothing qualifies, the list stays short or empty. Every Top 3 selection is tracked under Paper betting.</p>
       <h3>Value goal lines (not from the book)</h3>
       <p>The ratings model gives the chance of every scoreline, so it can price every goal line: Over/Under 1.5, 2.5 and 3.5. For each match the site checks Over/Under 1.5, Under 2.5 and Over/Under 3.5 and keeps the one with the best value, if it passes: odds <b>1.80–3.00</b>, our chance × odds <b>1.08 or more</b> (stricter than Over 2.5 because picking the best of five lines flatters the winner), bookmaker margin 8% or less, and not a cup match. On the 2024 test season the chances for every line matched the actual rates to within about 1 point. <b>These lines are not used in the Top 3</b>: tested against real historical Bet365 prices, Under 2.5 value picks lost 13–16%, and the 1.5 / 3.5 lines could not be tested. They stay on the site and are tracked under Paper betting, so they can come back if live results prove them.</p>
-      <h3>Backup site and “price beats the market average”</h3>
-      <p>A second copy of this site (link at the top) runs on free files from football-data.co.uk: this season’s results and upcoming fixtures with Bet365, best and average odds for about 38 leagues. It needs no API key, so it keeps daily selections going if API-Football is unavailable. Team form there uses league matches only, and odds are updated a few times a week, so always check the current price before betting. It also lists matches where the <b>best price on the market</b> is at least 4% above the market-average chance (margin removed): in the 2022–24 test this returned +10.5% over 302 bets, which is promising but not proven, so it is tracked on paper as an experiment.</p>
+      <h3>Data sources and “price beats the market average”</h3>
+      <p>This site runs on free files from football-data.co.uk: this season’s results and upcoming fixtures with Bet365, best and average odds for about 38 leagues, with no API key needed. A second version (link at the top) runs on API-Football, covering 1,000+ competitions including cups, and resumes when that account works again. Team form there uses league matches only, and odds are updated a few times a week, so always check the current price before betting. It also lists matches where the <b>best price on the market</b> is at least 4% above the market-average chance (margin removed): in the 2022–24 test this returned +10.5% over 302 bets, which is promising but not proven, so it is tracked on paper as an experiment.</p>
       <h3>Best price (line shopping)</h3>
       <p>Every Top 3 candidate (up to 10 matches a run) is priced across all bookmakers the data source covers, and the best price is shown next to Bet365’s. Selections are still decided on Bet365 prices; Paper betting also tracks the Top 3 at the best available price, to show what shopping around is worth.</p>
       <h3>Over 2.5 goals (not from the book)</h3>
@@ -378,10 +378,10 @@ drawCalc();
   ['h', 'a'].forEach(s => $('#n' + s).addEventListener('change', () => pickTeam(s)));
   ['h', 'a'].forEach(s => $('#n' + s).addEventListener('input', drawCalc));
   const m = DATA.stats && DATA.stats.meta;
-  const FDSITE = location.pathname.includes('/fd/');
+  const APISITE = location.pathname.includes('/api/');
   $('#meta').innerHTML = (m ? `Updated ${new Date(m.updated).toLocaleString()} · ${m.upcomingPredicted} of ${m.upcomingTotal} upcoming fixtures predicted` : 'Waiting for the first daily update.') +
-    (FDSITE ? ` · <b>Backup source: football-data.co.uk</b> (about 38 leagues, league matches only, odds updated a few times a week) · <a href="../">main site</a>`
-      : ` · <a href="fd/">backup site (football-data.co.uk)</a>`);
+    (APISITE ? ` · <b>API-Football version</b> (1,000+ competitions; paused while the account is suspended) · <a href="../">main site</a>`
+      : ` · Source: football-data.co.uk (about 38 leagues, league matches only, odds updated a few times a week) · <a href="api/">API-Football version</a>`);
   renderTop3(); renderUpcoming(); renderResults();
   renderStats(DATA.stats, $('#perfBody'), true);
   renderStats(DATA.backtest, $('#btBody'), false);
