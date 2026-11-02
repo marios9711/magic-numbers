@@ -1,0 +1,32 @@
+name: Probe bookmakers (one-off)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check bookmakers and all-bookmaker odds cost (2 requests)
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+        run: node scripts/probe.js
+      - name: Save
+        run: |
+          git config user.name "magic-numbers-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/probe.json
+          git diff --cached --quiet || git commit -m "Bookmaker probe result"
+          git pull --rebase
+          git push
