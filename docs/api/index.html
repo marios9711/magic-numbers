@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magic Numbers Predictions</title>
+<meta name="robots" content="noindex">
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e4e2dc;--acc:#1f5f4a;--win:#2e7d4f;--draw:#b8860b;--loss:#b3402f;--chip:#eeece6}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecebe6;--mute:#9b9a94;--line:#2f2f2c;--acc:#6cc3a0;--win:#5cbf86;--draw:#e0b341;--loss:#e07a68;--chip:#2a2a27}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{padding:20px 16px 0;max-width:1000px;margin:0 auto}
+h1{font-size:22px;margin:0 0 2px}
+.sub{color:var(--mute);font-size:13px}
+nav{display:flex;gap:4px;overflow-x:auto;padding:14px 16px 0;max-width:1000px;margin:0 auto;border-bottom:1px solid var(--line)}
+nav button{background:none;border:0;padding:8px 12px;font:inherit;color:var(--mute);border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap}
+nav button.on{color:var(--ink);border-color:var(--acc);font-weight:600}
+main{max-width:1000px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:12px}
+.kpi .v{font-size:26px;font-weight:700}.kpi .l{color:var(--mute);font-size:13px}.kpi .c{font-size:12px;color:var(--mute);margin-top:4px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+input,select{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+input[type=search]{flex:1;min-width:160px}
+.lg{font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.03em;margin:16px 0 6px}
+.m{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-top:1px solid var(--line);cursor:pointer}
+.m:first-child{border-top:0}
+.t{color:var(--mute);font-size:13px}
+.teams b{font-weight:600}.teams .sc{font-weight:700;margin:0 6px}
+.badges{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.b{font-size:12px;padding:2px 7px;border-radius:999px;background:var(--chip);white-space:nowrap}
+.b.pick{background:var(--acc);color:#fff;font-weight:700}
+.b.ok{background:var(--win);color:#fff}.b.no{background:var(--loss);color:#fff}
+.conf-high{outline:2px solid var(--acc)}.conf-low{opacity:.75}
+.det{grid-column:1/-1;font-size:13px;color:var(--mute);display:none;padding-top:4px}
+.m.open .det{display:block}
+.det ul{margin:6px 0 0;padding-left:18px}
+.seq{display:inline-flex;gap:2px;vertical-align:middle}
+.seq i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.W{background:var(--win)}.D{background:var(--draw)}.L{background:var(--loss)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:7px 6px;border-top:1px solid var(--line)}th{color:var(--mute);font-weight:500;font-size:12px}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:6px;background:var(--chip);border-radius:3px;overflow:hidden;min-width:60px}.bar i{display:block;height:100%;background:var(--acc)}
+.empty{color:var(--mute);text-align:center;padding:30px}
+.calc .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.calc .slot{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--chip);font-weight:700;cursor:pointer;color:#fff}
+.calc .slot.W{background:var(--win)}.calc .slot.D{background:var(--draw)}.calc .slot.L{background:var(--loss)}
+.note{font-size:13px;color:var(--mute)}
+.hide{display:none}
+.top3 h3{margin:0 0 4px}.top3 .pk{display:grid;grid-template-columns:52px 1fr auto;gap:10px;padding:10px 0;border-top:1px solid var(--line);align-items:center}
+.top3 .pk:first-of-type{border-top:0}.top3 .why{grid-column:2/-1;font-size:12px;color:var(--mute)}
+.tn{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.tn input{flex:1;min-width:180px}
+@media (max-width:560px){.m{grid-template-columns:44px 1fr}.badges{grid-column:1/-1;justify-content:flex-start}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Magic Numbers Predictions</h1>
+  <div class="sub" id="meta">Loading…</div>
+</header>
+<nav id="tabs">
+  <button data-t="upcoming" class="on">Upcoming</button>
+  <button data-t="results">Results</button>
+  <button data-t="perf">Live performance</button>
+  <button data-t="paper">Paper betting</button>
+  <button data-t="backtest">Backtest 2022–24</button>
+  <button data-t="calc">Calculator</button>
+  <button data-t="method">Method</button>
+</nav>
+<main>
+  <section id="upcoming">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search team or league">
+      <select id="conf"><option value="">All confidence</option><option value="high">High only</option><option value="medium">Medium +</option></select>
+      <select id="only"><option value="p">Predicted only</option><option value="all">All fixtures</option></select>
+    </div>
+    <div id="top3"></div>
+    <div id="upList"></div>
+  </section>
+  <section id="results" class="hide">
+    <div class="toolbar"><input type="search" id="q2" placeholder="Search team or league"></div>
+    <div id="resList"></div>
+  </section>
+  <section id="perf" class="hide"><div id="perfBody"></div></section>
+  <section id="paper" class="hide"><div id="paperBody"></div></section>
+  <section id="backtest" class="hide"><div id="btBody"></div></section>
+  <section id="calc" class="hide">
+    <div class="card calc">
+      <p class="note">Type a team name: if it is in the collected data, its known results fill in automatically. Click any box to cycle Win → Draw → Loss. Oldest result on the left, most recent on the right (all competitions, 8 matches).</p>
+      <label class="tn"><b>Home team</b><input id="nh" list="teamList" placeholder="Home team name" autocomplete="off"></label><div class="note" id="sh"></div><div class="row" id="ch"></div>
+      <label class="tn"><b>Away team</b><input id="na" list="teamList" placeholder="Away team name" autocomplete="off"></label><div class="note" id="sa"></div><div class="row" id="ca"></div>
+      <datalist id="teamList"></datalist>
+      <div id="calcOut"></div>
+    </div>
+  </section>
+  <section id="method" class="hide">
+    <div class="card">
+      <h3>Daily Top 3</h3>
+      <p>Up to three selections per day, never more than one per match. Strong <b>Over 2.5 goals</b> selections come first (best value first; other goal lines are not used); any places left go to the <b>book’s 1 / X / 2 pick</b> with high or medium confidence, odds between 1.80 and 4.00, a bookmaker margin of 8% or less, and value according to the ratings model (its chance for that result × odds ≥ 1.05), best value first. If nothing qualifies, the list stays short or empty. Every Top 3 selection is tracked under Paper betting.</p>
+      <h3>Value goal lines (not from the book)</h3>
+      <p>The ratings model gives the chance of every scoreline, so it can price every goal line: Over/Under 1.5, 2.5 and 3.5. For each match the site checks Over/Under 1.5, Under 2.5 and Over/Under 3.5 and keeps the one with the best value, if it passes: odds <b>1.80–3.00</b>, our chance × odds <b>1.08 or more</b> (stricter than Over 2.5 because picking the best of five lines flatters the winner), bookmaker margin 8% or less, and not a cup match. On the 2024 test season the chances for every line matched the actual rates to within about 1 point. <b>These lines are not used in the Top 3</b>: tested against real historical Bet365 prices, Under 2.5 value picks lost 13–16%, and the 1.5 / 3.5 lines could not be tested. They stay on the site and are tracked under Paper betting, so they can come back if live results prove them.</p>
+      <h3>Data sources and “price beats the market average”</h3>
+      <p>This site runs on free files from football-data.co.uk: this season’s results and upcoming fixtures with Bet365, best and average odds for about 38 leagues, with no API key needed. A second version (link at the top) runs on API-Football, covering 1,000+ competitions including cups, and resumes when that account works again. Team form there uses league matches only, and odds are updated a few times a week, so always check the current price before betting. It also lists matches where the <b>best price on the market</b> is at least 4% above the market-average chance (margin removed): in the 2022–24 test this returned +10.5% over 302 bets, which is promising but not proven, so it is tracked on paper as an experiment.</p>
+      <h3>Best price (line shopping)</h3>
+      <p>Every Top 3 candidate (up to 10 matches a run) is priced across all bookmakers the data source covers, and the best price is shown next to Bet365’s. Selections are still decided on Bet365 prices; Paper betting also tracks the Top 3 at the best available price, to show what shopping around is worth.</p>
+      <h3>Over 2.5 goals (not from the book)</h3>
+      <p>A statistical model built on the 2022–24 backtest seasons. It combines the ratings model’s Over 2.5 chance (below) with each team's goals scored and conceded over its last 6 matches (all competitions) and the league's average goals over its last 200 matches. A selection counts as <b>strong</b> only if it passes every check:</p>
+      <ul>
+        <li>Both teams have 6+ recorded matches and the league has 30+.</li>
+        <li>Our chance of 3+ goals is <b>60% or more</b>.</li>
+        <li>Both teams together average <b>3.0+ goals per game</b> (scored + conceded), and <b>7+ of their last 12 games</b> went Over 2.5.</li>
+        <li>Bet365 Over 2.5 odds are <b>1.80 or more</b> (and no more than 2.50).</li>
+        <li>Value: chance × odds is at least 1.05.</li>
+        <li>Bookmaker margin on Over/Under 2.5 is 8% or less.</li>
+        <li>Not a cup match (rotation risk); friendlies are always excluded.</li>
+      </ul>
+      <p class="note">On the 2024 test season, matches passing the chance and form checks went Over 2.5 64.5% of the time (break-even at odds 1.80 is 55.6%). The odds checks can only be proven live, so results are tracked separately.</p>
+      <h3>Ratings model (not from the book)</h3>
+      <p>Every team has an attack and a defence rating, and every league a scoring level and a home advantage. Expected goals for each side come from these; after each match the ratings move a little towards what happened (allowing for how strong the opponent was) and drift slightly back towards average, so a few results don't swing them too far. Expected goals are turned into the chance of every scoreline, and from those the chances of 1, X, 2 and Over 2.5. A team needs 6 recorded matches.</p>
+      <p class="note">2024 test season: the ratings pick was right 48.4% of the time (always home 44.1%, book’s method 28.6%). It is shown next to the book’s pick and tracked separately; the book stays the source of the 1 / X / 2 selections, and the ratings chance is used to check their value and size their paper stakes.</p>
+    </div>
+    <div class="card">
+      <h3>How predictions are made</h3>
+      <p>Each team's form is its most recent results in <b>all competitions</b> (friendlies excluded), using windows of 5, 6, 7 and 8 matches. A team needs at least 7 recorded matches before it is predicted. Every rule below adds weight to home win (1), draw (X) or away win (2); the highest total is the pick.</p>
+      <ul>
+        <li><b>Balance</b> (pp. 46–48): the result that makes the two 6-match forms, plus this match, as equal as possible.</li>
+        <li><b>Common zero</b> (p. 47): if neither team has drawn in 6, the draw fills the gap.</li>
+        <li><b>Trailing team</b> (pp. 79–81): the side with fewer positive results (wins + draws) over 7 does not lose; stronger when the 5-match form confirms it and at home. This is the book's main bet, shown as “Underdog”.</li>
+        <li><b>Unbeaten 7 vs one loss</b> (p. 81): a side unbeaten in 7 facing a side with exactly one loss in 7 tends to lose.</li>
+        <li><b>Six wins in a row</b> (p. 68): struggles to win again. <b>Six defeats</b> (p. 69): hard to beat by a moderate opponent.</li>
+        <li><b>Special forms</b>: home side at 1-1-4 doesn't lose to weaker form (p. 67); 4-1-1 gives up points only to equal or better form (p. 68); 1-2-3 is ready for a 4th loss, 2-1-3 is very hard to beat (p. 70).</li>
+        <li><b>Back home</b> (p. 70): three straight losses, then a home game → bounce back.</li>
+        <li><b>Golden sequence</b> (pp. 59–60): results that complete a 4-2-1 form over 7 get a small boost.</li>
+      </ul>
+      <p class="note">Bookmaker chances on this site have the margin removed with the “power” method, which takes more of it from outsiders than from favourites; on historical Bet365 prices it matched real results better than an even split.</p>
+      <p class="note">These rules are an interpretation of the book's text; the book does not give exact weights. Results are judged on the 90-minute score. Predictions are computed only from matches played before kick-off, so the record cannot see the future. This is a research tool, not betting advice.</p>
+    </div>
+  </section>
+</main>
+<script src="engine.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct = (h, n) => n ? (100 * h / n).toFixed(1) + '%' : '–';
+const DATA = {};
+async function load(name) { try { const r = await fetch('data/' + name + '.json?v=' + Date.now()); return r.ok ? r.json() : null; } catch { return null; } }
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.id !== b.dataset.t));
+  try { localStorage.setItem('tab', b.dataset.t); } catch {}
+});
+try { const t = localStorage.getItem('tab'); if (t) document.querySelector(`#tabs [data-t="${t}"]`)?.click(); } catch {}
+
+const time = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const dayLabel = ts => new Date(ts * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+const seq = s => `<span class="seq">${[...(s || '')].map(c => `<i class="${c}" title="${c}"></i>`).join('')}</span>`;
+
+// Bookmaker's margin-free chances (power method, same as the build scripts).
+function powerFair(odds) {
+  const q = odds.map(o => 1 / o), sum = k => q.reduce((s, v) => s + v ** k, 0);
+  let lo = 0.5, hi = 3;
+  for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (sum(mid) > 1) lo = mid; else hi = mid; }
+  return q.map(v => v ** ((lo + hi) / 2));
+}
+function matchRow(x, settled) {
+  const p = x.p;
+  let badges = '';
+  if (p) {
+    const mk = (m, cls = '', pre = '') => {
+      if (!settled) return `<span class="b ${cls}">${pre}${m}</span>`;
+      const ok = Engine.hit(String(m).split(' ')[0], x.o);
+      return `<span class="b ${cls} ${ok ? 'ok' : 'no'}">${pre}${m} ${ok ? '✓' : '✗'}</span>`;
+    };
+    const at = m => (x.od && x.od[m] ? ` @${x.od[m].toFixed(2)}` : '');
+    badges = mk(p.pick + at(p.pick), 'pick', 'Pick ') + `<span class="b">DC ${p.dc}${at(p.dc)}</span>` + (p.ud ? mk(p.ud + at(p.ud), '', 'Underdog ') : '') + `<span class="b">${p.conf}</span>`;
+    if (settled) badges = mk(p.pick, 'pick', 'Pick ') + (p.ud ? mk(p.ud, '', 'Underdog ') : '') + mk(p.dc, '', 'DC ');
+    if (x.od) badges += `<span class="b" title="${esc(x.bm || '')} odds">odds ${['1', 'X', '2'].map(k => x.od[k] ? x.od[k].toFixed(2) : '–').join(' / ')}</span>`;
+  } else badges = '<span class="b">not enough history</span>';
+  if (x.r) {
+    const rp = x.r[x.r.pick], at2 = x.od && x.od[x.r.pick] ? ` @${x.od[x.r.pick].toFixed(2)}` : '';
+    if (settled) { const ok = Engine.hit(x.r.pick, x.o); badges += `<span class="b ${ok ? 'ok' : 'no'}">Ratings ${x.r.pick} ${ok ? '✓' : '✗'}</span>`; }
+    else badges += `<span class="b" title="Ratings model 1/X/2 pick and its chance">Ratings ${x.r.pick} ${Math.round(rp * 100)}%${at2}</span>`;
+  }
+  if (x.g && x.g.alt && !settled) { const a = x.g.alt; badges += `<span class="b" title="Best-value goal line — tracked on paper, not used in the Top 3">${a.k} ${Math.round(a.p * 100)}% @${a.o.toFixed(2)}</span>`; }
+  if (x.g && x.g.alt && settled) { const a = x.g.alt, t = x.hg + x.ag, ok = a.k[0] === 'O' ? t > +a.k.slice(1) : t < +a.k.slice(1); badges += `<span class="b ${ok ? 'ok' : 'no'}">${a.k} @${a.o.toFixed(2)} ${ok ? '✓' : '✗'}</span>`; }
+  if (x.g) {
+    const ov = `O2.5 ${Math.round(x.g.p * 100)}%${x.g.o ? ' @' + x.g.o.toFixed(2) : ''}`;
+    if (settled && x.g.strong) { const ok = x.hg + x.ag > 2; badges += `<span class="b ${ok ? 'ok' : 'no'}">${ov} ${ok ? '✓' : '✗'}</span>`; }
+    else if (!settled) badges += `<span class="b${x.g.strong ? ' pick' : ''}" title="Over 2.5 goals">${x.g.strong ? '★ ' : ''}${ov}</span>`;
+  }
+  const score = settled ? `<span class="sc">${x.hg}–${x.ag}</span>` : ' v ';
+  const ldet = x.g && x.g.lines ? `<div>Goal lines (our chance${x.od ? ' @ Bet365' : ''}${x.best ? ' / best price' : ''}): ${['O1.5', 'U1.5', 'O2.5', 'U2.5', 'O3.5', 'U3.5'].map(k => `${k} ${Math.round(x.g.lines[k] * 100)}%${x.od && x.od[k] ? ' @' + x.od[k].toFixed(2) : ''}${x.best && x.best[k] ? ' / ' + x.best[k][0].toFixed(2) : ''}`).join(' · ')}</div>` : '';
+  const gdet = ldet + (x.g ? `<div>Over 2.5: ${x.g.strong ? '<b>strong selection</b>' : 'not strong'}${x.g.fair != null ? ` (our chance ${Math.round(x.g.p * 100)}% vs bookmaker ${Math.round(x.g.fair * 100)}%)` : ''} — ${[...x.g.pass.map(t => '✓ ' + esc(t)), ...x.g.fail.map(t => '✗ ' + esc(t))].join(' · ')}</div>` : '');
+  const rdet = x.r ? `<div>Ratings: 1 ${Math.round(x.r['1'] * 100)}% · X ${Math.round(x.r.X * 100)}% · 2 ${Math.round(x.r['2'] * 100)}% — expected goals ${x.r.lh.toFixed(2)}–${x.r.la.toFixed(2)}${x.od && x.od['1'] && x.od.X && x.od['2'] ? ` · bookmaker ${powerFair([x.od['1'], x.od.X, x.od['2']]).map(v => Math.round(100 * v) + '%').join(' / ')}` : ''}</div>` : '';
+  const det = !p && (x.g || x.r) ? `<div class="det">${rdet}${gdet}</div>` : p ? `<div class="det">${rdet}${gdet}${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
+    <div>Scores — 1: ${p.s.H} · X: ${p.s.D} · 2: ${p.s.A}</div><ul>${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
+  return `<div class="m ${p && !settled ? 'conf-' + p.conf : ''}" onclick="this.classList.toggle('open')">
+    <div class="t">${settled ? dayLabel(x.ts).split(' ').slice(1).join(' ') : time(x.ts)}</div>
+    <div class="teams"><b>${esc(x.hn)}</b>${score}<b>${esc(x.an)}</b><div class="t">${esc(x.lg)}</div></div>
+    <div class="badges">${badges}</div>${det}</div>`;
+}
+
+function renderUpcoming() {
+  const q = $('#q').value.toLowerCase(), conf = $('#conf').value, only = $('#only').value;
+  const rank = { high: 3, medium: 2, low: 1 };
+  let list = (DATA.upcoming || []).filter(x => (only === 'all' || x.p) &&
+    (!q || (x.hn + x.an + x.lg).toLowerCase().includes(q)) &&
+    (!conf || (x.p && rank[x.p.conf] >= rank[conf])));
+  list.sort((a, b) => a.ts - b.ts);
+  if (!list.length) { $('#upList').innerHTML = `<div class="card empty">${(DATA.upcoming || []).length ? 'No matches for this filter.' : 'No upcoming fixtures yet — the daily job fills this in.'}<br><span class="note">During the warm-up, teams need 7 recorded matches before they can be predicted.</span></div>`; return; }
+  let html = '', curDay = '';
+  const groups = [];
+  for (const x of list) { const d = dayLabel(x.ts); if (d !== curDay) { groups.push([d, []]); curDay = d; } groups[groups.length - 1][1].push(x); }
+  for (const [d, xs] of groups) html += `<div class="lg">${d} · ${xs.length}</div><div class="card" style="padding:0">${xs.map(x => matchRow(x, false)).join('')}</div>`;
+  $('#upList').innerHTML = html;
+}
+function renderTop3() {
+  const T = DATA.top3; if (!T) { $('#top3').innerHTML = ''; return; }
+  const say = (c) => /^[OU]\d/.test(c.m) ? `${c.m[0] === 'O' ? 'Over' : 'Under'} ${c.m.slice(1)} goals` : { '1': `${c.hn} to win`, X: 'Draw', '2': `${c.an} to win` }[c.m];
+  const dname = (d, i) => i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : new Date(d + 'T12:00:00Z').toLocaleDateString([], { weekday: 'long' });
+  const sharp = d => d.sharp && d.sharp.length ? `<div class="lg" style="margin-top:10px">Price beats the market average (experimental)</div>${d.sharp.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
+      <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
+      <div class="badges"><span class="b ok">${esc(say(c))} @${c.odd.toFixed(2)} best</span>${c.b365 ? `<span class="b">Bet365 ${c.b365.toFixed(2)}</span>` : ''}<span class="b">market chance ${Math.round(c.fair * 100)}% · value ${c.v.toFixed(2)}</span></div></div>`).join('')}` : '';
+  const days = T.days.filter((d, i) => i < 2 || d.picks.length || (d.sharp && d.sharp.length));
+  $('#top3').innerHTML = days.map((d, i) => `<div class="card top3"><h3>${dname(d.d, T.days.indexOf(d))}’s Top 3 <span class="note">${d.d}</span></h3>
+    ${d.picks.length ? d.picks.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
+      <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
+      <div class="badges"><span class="b pick">${esc(say(c))} @${c.odd.toFixed(2)}</span>${c.best ? `<span class="b ok" title="Best price across ${c.nb || 'all'} bookmakers">best ${c.best[0].toFixed(2)} · ${esc(c.best[1])}</span>` : ''}<span class="b">${esc(c.kind)}${c.p ? ' · ' + Math.round(c.p * 100) + '%' : ''}</span>${c.started ? '<span class="b">started</span>' : ''}</div>
+      <div class="why">${c.why.map(esc).join(' · ')}</div></div>`).join('')
+    : `<div class="note">No strong selections${i ? ' yet — odds arrive with each update.' : ' today.'} A pick needs odds of 1.80 or more and must pass every check (see Method).</div>`}${sharp(d)}</div>`).join('');
+}
+function renderResults() {
+  const q = $('#q2').value.toLowerCase();
+  const list = (DATA.settled || []).filter(x => !q || (x.hn + x.an + x.lg).toLowerCase().includes(q)).slice(0, 300);
+  $('#resList').innerHTML = list.length ? `<div class="card" style="padding:0">${list.map(x => matchRow(x, true)).join('')}</div>` : '<div class="card empty">No settled predictions yet.</div>';
+}
+
+function kpi(label, a, base, baseLabel) {
+  return `<div class="card kpi"><div class="l">${label}</div><div class="v">${pct(a.hit, a.n)}</div>
+    <div class="c">${a.hit}/${a.n} correct${base ? ` · baseline ${baseLabel}: ${pct(base.hit, base.n)}` : ''}</div></div>`;
+}
+function table(title, obj, cols, minN = 1) {
+  const N = v => v.n ?? v.bets;
+  const rows = Object.entries(obj || {}).filter(([, v]) => N(v) >= minN).sort((a, b) => N(b[1]) - N(a[1]));
+  if (!rows.length) return '';
+  return `<div class="card"><h3 style="margin:0 0 6px">${title}</h3><table><tr>${cols.map(c => `<th>${c[0]}</th>`).join('')}</tr>${rows.map(([k, v]) => `<tr>${cols.map(c => c[1](k, v)).join('')}</tr>`).join('')}</table></div>`;
+}
+const barCell = (h, n) => `<td><div class="bar"><i style="width:${n ? 100 * h / n : 0}%"></i></div></td>`;
+const RULE = { balance: 'Balance', commonZero: 'Common zero', trailing: 'Trailing team', unbeaten7: 'Unbeaten 7 vs one loss', sixWins: 'Six wins in a row', sixLosses: 'Six defeats', home114: 'Home 1-1-4', form411: '4-1-1 form', form123: '1-2-3 form', form213: '2-1-3 form', backHome: 'Back home after 3 losses', golden: 'Golden 4-2-1' };
+
+function renderStats(S, el, live) {
+  if (!S || !S.graded) {
+    el.innerHTML = `<div class="card empty">${live ? 'No graded predictions yet. Results appear once predicted matches finish.' : 'The backtest has not run yet. It starts automatically after setup and needs about two days to download every season.'}</div>`;
+    if (live && S && S.meta) el.innerHTML += warm(S.meta);
+    return;
+  }
+  const o = S.outcomes, tot = o.H + o.D + o.A;
+  el.innerHTML = (live ? warm(S.meta) : `<div class="card note">${S.meta.leagueSeasons}/${S.meta.planned} league-seasons downloaded. ${S.meta.note}</div>`) +
+    `<div class="grid">
+      ${kpi('Pick (1 / X / 2)', S.pick, S.baseHome, 'always home win')}
+      ${kpi('Underdog not to lose (book’s main bet)', S.underdog, S.baseHomeOrDraw, 'always 1X')}
+      ${kpi('Double chance', S.doubleChance, S.baseHomeOrDraw, 'always 1X')}
+      ${kpi('Form favourite wins (baseline)', S.baseFormFav)}
+    </div>
+    <div class="card note">Actual results in this sample: home ${pct(o.H, tot)}, draw ${pct(o.D, tot)}, away ${pct(o.A, tot)}. The method only adds value where it beats the baselines.</div>` +
+    table('By confidence', S.byConfidence, [['Level', k => `<td>${k}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
+    table('By rule (when the rule fired, did its favoured result happen?)', S.byRule, [['Rule', k => `<td>${RULE[k] || k}</td>`], ['Times', (k, v) => `<td class="n">${v.n}</td>`], ['Correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
+    table('By league (10+ matches)', S.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['Underdog', (k, v) => `<td class="n">${pct(v.udHit, v.ud)}</td>`], ['DC', (k, v) => `<td class="n">${pct(v.dc, v.n)}</td>`]], 10);
+}
+const PM = { top3: ['Daily Top 3', 'method'], top3best: ['Daily Top 3 at the best price', 'method'], over25: ['Strong Over 2.5 goals', 'method'], alt: ['Value goal lines (Over/Under 1.5, 3.5, Under 2.5)', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], sharp: ['Price beats the market average (experimental)', 'method'], ratings: ['Ratings pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
+const eur = n => (n < 0 ? '−€' : '+€') + Math.abs(n).toFixed(2);
+function renderPaper(S, el) {
+  const P = S && S.paper;
+  if (!P || !P.markets.pick.bets) {
+    el.innerHTML = `<div class="card empty">No paper bets settled yet.<br><span class="note">Every predicted match gets bookmaker odds recorded before kick-off, and a pretend €10 stake on each bet type. Results start once predictions appear after the warm-up.</span></div>`;
+    return;
+  }
+  const cards = Object.entries(PM).map(([k, [label, kind]]) => {
+    const a = P.markets[k] || { bets: 0, won: 0, profit: 0 }, roi = a.bets ? 100 * a.profit / (a.bets * P.stake) : 0;
+    return `<div class="card kpi"><div class="l">${label}${kind === 'baseline' ? ' <span class="b">comparison</span>' : ''}</div>
+      <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
+      <div class="c">${a.bets} bets · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div>${verdict(a, P.stake)}${clvLine(P.clv && P.clv[k])}</div>`;
+  }).join('');
+  el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets. Each card shows the likely range of the true long-run return: only when the whole range is above zero is it more than luck.</div>
+    <div class="card note"><b>Beat later price</b> (closing line value): the first odds we recorded compared with the bookmaker's own chance at the last run before kick-off, with its margin removed. Consistently positive means our picks find prices before the market corrects them — the earliest sign of a real edge, visible long before profit is reliable. Always the favourite shows what “no edge” looks like.</div>
+    <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}` +
+    table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
+}
+const clvLine = c => c && c.n ? `<div class="c" title="First price we saw compared with the bookmaker's later price, margin removed. Positive means we beat the market.">Beat later price: <b style="color:${c.avg >= 0 ? 'var(--win)' : 'var(--loss)'}">${c.avg >= 0 ? '+' : ''}${c.avg.toFixed(1)}%</b> avg · ${c.pos}% of ${c.n}</div>` : '';
+function vsMarket(P) {
+  const V = P.vsMarket || {}, B = P.brier || {}, keys = Object.keys(PM).filter(k => V[k] && V[k].n);
+  if (!keys.length && !(B.over && B.over.n)) return '';
+  const gap = v => { const d = v.hit - v.exp; return `<td class="n" style="color:${d >= 0 ? 'var(--win)' : 'var(--loss)'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}</td>`; };
+  const rows = keys.map(k => `<tr><td>${PM[k][0]}</td><td class="n">${V[k].n}</td><td class="n">${V[k].hit.toFixed(1)}%</td><td class="n">${V[k].exp.toFixed(1)}%</td>${gap(V[k])}</tr>`).join('');
+  const bRow = (label, a) => a && a.n ? `<tr><td>${label}</td><td class="n">${a.n}</td><td class="n"${a.model <= a.market ? ' style="color:var(--win);font-weight:700"' : ''}>${a.model.toFixed(4)}</td><td class="n">${a.market.toFixed(4)}</td><td class="n">${a.flat.toFixed(4)}</td></tr>` : '';
+  return `<div class="card"><h3 style="margin:0 0 6px">Against the bookmaker</h3>
+    <p class="note">How often each bet won compared with how often the bookmaker's own price (margin removed) said it should. A positive gap means our selections win more often than the market expects.</p>
+    ${rows ? `<table><tr><th>Bet</th><th>Bets</th><th>Won</th><th>Bookmaker expected</th><th>Gap (points)</th></tr>${rows}</table>` : ''}
+    ${B.over && B.over.n || B.book && B.book.n ? `<p class="note" style="margin-top:12px">Accuracy score (Brier — lower is better). Ours is in bold green when it beats the bookmaker.</p>
+    <table><tr><th>Market</th><th>Matches</th><th>Ours</th><th>Bookmaker</th><th>Flat guess</th></tr>${bRow('Over 2.5 goals (goals model)', B.over)}${bRow('1 / X / 2 (ratings model)', B.ratings)}${bRow('1 / X / 2 (book’s rule scores)', B.book)}</table>` : ''}</div>`;
+}
+function sized(S) {
+  if (!S || !(S.over25.bets || S.top3.bets)) return '';
+  const card = (label, a) => { const roi = a.staked ? 100 * a.profit / a.staked : 0; return `<div class="card kpi"><div class="l">${label} <span class="b">sized by edge</span></div>
+    <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
+    <div class="c">${a.bets} bets · €${a.staked.toFixed(0)} staked · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div></div>`; };
+  return `<div class="card note">Edge-sized stakes: a quarter of the Kelly amount from a notional €${S.bank} bank (max €${S.bank * 0.05} a bet), so bigger edges get bigger stakes. Over 2.5 uses the goals model’s chance; the book’s picks use the ratings model’s chance for that result.</div>
+    <div class="grid">${card('Strong Over 2.5 goals', S.over25)}${card('Daily Top 3', S.top3)}</div>`;
+}
+// Skill or luck? Return per bet = profit / stake. 95% range = average ± 2 standard errors.
+function verdict(a, stake) {
+  if (!a || a.bets < 1 || a.sq == null) return '';
+  if (a.bets < 30) return `<div class="c"><b style="color:var(--mute)">too few bets to judge yet (${a.bets} of at least 30)</b></div>`;
+  const n = a.bets, m = a.profit / stake / n, sd = Math.sqrt(Math.max(0, a.sq / n - m * m)), se = sd / Math.sqrt(n);
+  const lo = (m - 2 * se) * 100, hi = (m + 2 * se) * 100, f = v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`;
+  let say, col;
+  if (lo > 0) { say = 'looks like a real edge'; col = 'var(--win)'; }
+  else if (hi < 0) { say = 'losing — not just bad luck'; col = 'var(--loss)'; }
+  else if (m > 0 && sd > 0) { const need = Math.ceil((2 * sd / m) ** 2); say = `not proven yet — about ${need.toLocaleString()} bets needed at this rate`; col = 'var(--mute)'; }
+  else { say = 'not proven either way yet'; col = 'var(--mute)'; }
+  return `<div class="c" title="The true long-run return is probably somewhere in this range (95%).">Likely range ${f(lo)} to ${f(hi)} · <b style="color:${col}">${say}</b></div>`;
+}
+function top3Hist(h) {
+  if (!h || !h.length) return '';
+  const say = c => /^[OU]\d/.test(c.m) ? `${c.m[0] === 'O' ? 'Over' : 'Under'} ${c.m.slice(1)}` : c.m;
+  return `<div class="card"><h3 style="margin:0 0 6px">Recent Top 3 results</h3><table><tr><th>Day</th><th>Selections</th></tr>${h.map(d => `<tr><td>${d.d}</td><td>${d.picks.map(c => `<span class="b ${c.ok ? 'ok' : 'no'}">${esc(c.hn)} v ${esc(c.an)} · ${say(c)} @${c.odd.toFixed(2)} (${c.sc}) ${c.ok ? '✓' : '✗'}</span>`).join(' ')}</td></tr>`).join('')}</table></div>`;
+}
+function chart(tl) {
+  if (!tl || tl.length < 2) return '';
+  const keys = ['pick', 'underdog', 'home'], col = { pick: 'var(--acc)', underdog: 'var(--draw)', home: 'var(--mute)' };
+  const W = 600, H = 180, all = tl.flatMap(t => keys.map(k => t[k])), lo = Math.min(0, ...all), hi = Math.max(0, ...all), span = hi - lo || 1;
+  const X = i => 30 + (W - 40) * i / (tl.length - 1), Y = v => 10 + (H - 30) * (hi - v) / span;
+  const lines = keys.map(k => `<polyline fill="none" stroke="${col[k]}" stroke-width="2" points="${tl.map((t, i) => `${X(i).toFixed(1)},${Y(t[k]).toFixed(1)}`).join(' ')}"/>`).join('');
+  return `<div class="card"><h3 style="margin:0 0 6px">Running balance</h3><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
+    <line x1="30" x2="${W - 10}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line)"/><text x="0" y="${Y(0) + 4}" font-size="11" fill="var(--mute)">€0</text>${lines}</svg>
+    <div class="note">${keys.map(k => `<span style="color:${col[k]}">■</span> ${PM[k][0]}`).join(' &nbsp; ')}</div></div>`;
+}
+function warm(m) {
+  if (!m) return '';
+  return `<div class="card note">Collected ${m.daysCollected} days (${m.firstDay} → ${m.lastDay}), ${m.fixtures.toLocaleString()} fixtures. Teams with enough history: <b>${m.teamsReady.toLocaleString()}</b> of ${m.teams.toLocaleString()}.</div>`;
+}
+
+// Calculator
+const calc = { h: 'WDLWWDLW'.split(''), a: 'LLDWLDDL'.split(''), home: {} };
+const TEAMS = new Map();
+function pickTeam(s) {
+  const v = $('#n' + s).value.trim(), t = TEAMS.get(v.toLowerCase());
+  calc.home[s] = null;
+  if (!t) { $('#s' + s).textContent = v ? 'Not in the collected data yet — enter results by hand.' : ''; drawCalc(); return; }
+  const r = t.r.split(''), hm = t.h.split('');
+  calc[s] = [...calc[s].slice(0, 8 - r.length), ...r];
+  calc.home[s] = [...Array(8 - hm.length).fill('0').map((_, i) => (i % 2 ? '0' : '1')), ...hm].join('');
+  $('#s' + s).textContent = `${t.l}: ${r.length} of 8 results filled from collected data` + (r.length < 8 ? ' — set the older ones by hand.' : '.');
+  drawCalc();
+}
+function drawCalc() {
+  for (const s of ['h', 'a']) $('#c' + s).innerHTML = calc[s].map((r, i) => `<button class="slot ${r}" data-s="${s}" data-i="${i}">${r}</button>`).join('');
+  document.querySelectorAll('.slot').forEach(b => b.onclick = () => { const s = b.dataset.s, i = +b.dataset.i; calc[s][i] = { W: 'D', D: 'L', L: 'W' }[calc[s][i]]; drawCalc(); });
+  const mk = (arr, s) => arr.map((r, i) => ({ r, home: calc.home[s] ? calc.home[s][i] === '1' : i % 2 === 0 }));
+  const p = Engine.predict(mk(calc.h, 'h'), mk(calc.a, 'a'));
+  const hn = $('#nh').value.trim() || 'Home team', an = $('#na').value.trim() || 'Away team';
+  const say = { '1': `${hn} to win`, 'X': 'Draw', '2': `${an} to win`, '1X': `${hn} not to lose`, 'X2': `${an} not to lose`, '12': 'No draw' };
+  $('#calcOut').innerHTML = `<div style="margin:14px 0 4px;font-size:17px"><b>${esc(hn)}</b> v <b>${esc(an)}</b></div>
+   <div style="margin-bottom:6px">Prediction: <b>${esc(say[p.pickLabel])}</b> (${p.pickLabel}) · Double chance: ${esc(say[p.doubleChance])}${p.underdog ? ` · Book’s underdog bet: <b>${esc(say[p.underdog])}</b>` : ''}</div>
+   <div class="badges" style="justify-content:flex-start;margin:10px 0"><span class="b pick">Pick ${p.pickLabel}</span><span class="b">DC ${p.doubleChance}</span>${p.underdog ? `<span class="b">Underdog ${p.underdog}</span>` : ''}<span class="b">${p.confidence}</span></div>
+   <div class="note">Home 6: ${p.forms.h.f6} · 7: ${p.forms.h.f7} — Away 6: ${p.forms.a.f6} · 7: ${p.forms.a.f7} — Scores 1: ${p.scores.H.toFixed(1)} · X: ${p.scores.D.toFixed(1)} · 2: ${p.scores.A.toFixed(1)}</div>
+   <ul class="note">${p.rules.map(r => `<li>${esc(r.text)}</li>`).join('')}</ul>`;
+}
+drawCalc();
+
+(async () => {
+  [DATA.upcoming, DATA.settled, DATA.stats, DATA.backtest, DATA.teams, DATA.top3] = await Promise.all(['upcoming', 'settled', 'stats', 'backtest', 'teams', 'top3'].map(load));
+  for (const t of DATA.teams || []) { const k = t.n.toLowerCase(); if (!TEAMS.has(k) || t.r.length > TEAMS.get(k).r.length) TEAMS.set(k, t); }
+  $('#teamList').innerHTML = [...TEAMS.values()].map(t => `<option value="${esc(t.n)}">${esc(t.l)}</option>`).join('');
+  ['h', 'a'].forEach(s => $('#n' + s).addEventListener('change', () => pickTeam(s)));
+  ['h', 'a'].forEach(s => $('#n' + s).addEventListener('input', drawCalc));
+  const m = DATA.stats && DATA.stats.meta;
+  const APISITE = location.pathname.includes('/api/');
+  $('#meta').innerHTML = (m ? `Updated ${new Date(m.updated).toLocaleString()} · ${m.upcomingPredicted} of ${m.upcomingTotal} upcoming fixtures predicted` : 'Waiting for the first daily update.') +
+    (APISITE ? ` · <b>API-Football version</b> (1,000+ competitions; paused while the account is suspended) · <a href="../">main site</a>`
+      : ` · Source: football-data.co.uk (about 38 leagues, league matches only, odds updated a few times a week) · <a href="api/">API-Football version</a>`);
+  renderTop3(); renderUpcoming(); renderResults();
+  renderStats(DATA.stats, $('#perfBody'), true);
+  renderStats(DATA.backtest, $('#btBody'), false);
+  renderPaper(DATA.stats, $('#paperBody'));
+  ['q', 'conf', 'only'].forEach(id => $('#' + id).addEventListener('input', renderUpcoming));
+  $('#q2').addEventListener('input', renderResults);
+})();
+</script>
+</body>
+</html>
