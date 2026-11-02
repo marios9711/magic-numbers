@@ -1,5 +1,6 @@
 // Builds the website data from all collected days.
-// SOURCE=fd builds the backup site (docs/fd/) from football-data.co.uk files instead of API-Football.
+// SOURCE=fd builds the main site (docs/) from football-data.co.uk files; without it the API-Football
+// version is built into docs/api/.
 const fs = require('fs');
 const path = require('path');
 const { ROOT, readJSON, writeJSON, evaluate, stats, slim } = require('./lib');
@@ -225,7 +226,7 @@ const teams = [...hist.entries()].filter(([, h]) => h.length).map(([id, h]) => {
   return { n: t.n, l: t.l, r: last.map(m => m.r).join(''), h: last.map(m => (m.home ? 1 : 0)).join('') };
 }).sort((a, b) => a.n.localeCompare(b.n));
 
-const out = path.join(ROOT, FD ? 'docs/fd/data' : 'docs/data');
+const out = path.join(ROOT, FD ? 'docs/data' : 'docs/api/data');
 writeJSON(path.join(out, 'teams.json'), teams);
 writeJSON(path.join(out, 'upcoming.json'), upcoming);
 writeJSON(path.join(out, 'settled.json'), settled);
