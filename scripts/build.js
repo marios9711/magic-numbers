@@ -85,7 +85,7 @@ const MK = {
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 for (const k of ['over25', 'alt', 'top3', 'top3best']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; };
+const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
 for (const x of settledAll) if (x.g && x.g.alt) addBet('alt', x.g.alt.o, lineHit(x.g.alt.k, x));
 const top3Hist = [];
@@ -167,7 +167,7 @@ for (const x of settledAll.filter(x => x.od && x.p).sort((a, b) => a.ts - b.ts))
     const m = MK[k](x), odd = m && x.od[m];
     if (!odd) continue;
     const pr = hitM(m, x.o) ? STAKE * (odd - 1) : -STAKE;
-    const a = paper.markets[k]; a.bets++; if (pr > 0) a.won++; a.profit += pr; cum[k] += pr;
+    const a = paper.markets[k]; a.bets++; if (pr > 0) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; cum[k] += pr;
     if (k === 'pick') { const l = (paper.byLeague[x.lg] ||= { bets: 0, won: 0, profit: 0 }); l.bets++; if (pr > 0) l.won++; l.profit += pr; }
   }
   days.set(new Date(x.ts * 1000).toISOString().slice(0, 10), { ...cum });

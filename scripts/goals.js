@@ -117,10 +117,16 @@ function judge(g, od) {
 
 // Bookmaker's own chance for a selection, with its margin removed (1X2 or Over/Under 2.5 group).
 const GROUPS = [['1', 'X', '2'], ['O2.5', 'U2.5'], ['O1.5', 'U1.5'], ['O3.5', 'U3.5']];
+// Power method: raise each implied chance (1/odds) to the same power k so they add up to 1.
+// This takes more of the margin from outsiders than from favourites, as bookmakers do; on the
+// historical Bet365 prices it fitted real results better than an even (proportional) split.
 function fairProb(m, key) {
   const g = m && GROUPS.find(g => g.includes(key));
   if (!g || !g.every(k => m[k] > 1)) return null;
-  return (1 / m[key]) / g.reduce((s, k) => s + 1 / m[k], 0);
+  const q = g.map(k => 1 / m[k]), sum = k => q.reduce((s, v) => s + v ** k, 0);
+  let lo = 0.5, hi = 3;
+  for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (sum(mid) > 1) lo = mid; else hi = mid; }
+  return q[g.indexOf(key)] ** ((lo + hi) / 2);
 }
 
 module.exports = { goalsModel, judge, RULES, ALT, fairProb };
