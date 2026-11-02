@@ -34,6 +34,13 @@ jobs:
         run: node scripts/odds.js
       - name: Rebuild with odds
         run: node scripts/build.js
+      - name: Shop the shortlisted selections across all bookmakers
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+          SHOP_MAX: '10'
+        run: node scripts/shop.js
+      - name: Rebuild with best prices
+        run: node scripts/build.js
       - name: Save
         run: |
           git config user.name "magic-numbers-bot"
