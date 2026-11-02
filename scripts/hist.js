@@ -1,5 +1,5 @@
 // One-off: downloads historical results and bookmaker odds from football-data.co.uk for the
-// backtest leagues (2022–24 seasons) and saves trimmed copies in data/hist/. No API-Football
+// backtest leagues (2022–25 seasons) and saves trimmed copies in data/hist/. No API-Football
 // requests are used. Run manually from the Actions tab ("History odds").
 const fs = require('fs');
 const path = require('path');
@@ -28,7 +28,7 @@ function trim(text, keepRow = () => true) {
 
 (async () => {
   let ok = 0, bad = 0;
-  for (const [lg, code] of Object.entries(MAIN)) for (const [s, tag] of [[2022, '2223'], [2023, '2324'], [2024, '2425']]) {
+  for (const [lg, code] of Object.entries(MAIN)) for (const [s, tag] of [[2022, '2223'], [2023, '2324'], [2024, '2425'], [2025, '2526']]) {
     try {
       const r = await fetch(`https://www.football-data.co.uk/mmz4281/${tag}/${code}.csv`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -41,7 +41,7 @@ function trim(text, keepRow = () => true) {
       const r = await fetch(`https://www.football-data.co.uk/new/${code}.csv`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const text = await r.text();
-      for (const s of [2022, 2023, 2024]) {
+      for (const s of [2022, 2023, 2024, 2025]) {
         const t = trim(text, (c, head) => String(c[head.indexOf('Season')] || '').trim().startsWith(String(s)));
         if (t.split('\n').length > 2) { fs.writeFileSync(path.join(out, `${lg}-${s}.csv`), t); ok++; }
       }
