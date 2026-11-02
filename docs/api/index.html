@@ -99,6 +99,8 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
     <div class="card">
       <h3>Daily Top 3</h3>
       <p>Up to three selections per day, never more than one per match. Strong <b>Over 2.5 goals</b> selections come first (best value first; other goal lines are not used); any places left go to the <b>book’s 1 / X / 2 pick</b> with high or medium confidence, odds between 1.80 and 4.00, a bookmaker margin of 8% or less, and value according to the ratings model (its chance for that result × odds ≥ 1.05), best value first. If nothing qualifies, the list stays short or empty. Every Top 3 selection is tracked under Paper betting.</p>
+      <h3>Over 2.5 goals — the day’s 3 most likely</h3>
+      <p>Every match day, the three matches most likely to have 3 or more goals, ranked by the average of our goals model and the bookmaker’s own chance (margin removed). This list is always filled when there are at least three matches with odds; it does not require value. Over half of all matches end with 3+ goals, so the aim is to find the likeliest ones. Tested on 2022–24 with real Bet365 prices (593 match days): these picks won <b>61.6%</b> of the time at average odds of about 1.59, which returned <b>−3.8%</b> at Bet365 and <b>−1.0%</b> at the best price; all three won on about 1 day in 4. Break-even at 1.59 is 63%, so use the best price. Tracked separately under Paper betting.</p>
       <h3>Value goal lines (not from the book)</h3>
       <p>The ratings model gives the chance of every scoreline, so it can price every goal line: Over/Under 1.5, 2.5 and 3.5. For each match the site checks Over/Under 1.5, Under 2.5 and Over/Under 3.5 and keeps the one with the best value, if it passes: odds <b>1.80–3.00</b>, our chance × odds <b>1.08 or more</b> (stricter than Over 2.5 because picking the best of five lines flatters the winner), bookmaker margin 8% or less, and not a cup match. On the 2024 test season the chances for every line matched the actual rates to within about 1 point. <b>These lines are not used in the Top 3</b>: tested against real historical Bet365 prices, Under 2.5 value picks lost 13–16%, and the 1.5 / 3.5 lines could not be tested. They stay on the site and are tracked under Paper betting, so they can come back if live results prove them.</p>
       <h3>Data sources and “price beats the market average”</h3>
@@ -224,13 +226,16 @@ function renderTop3() {
   const sharp = d => d.sharp && d.sharp.length ? `<div class="lg" style="margin-top:10px">Price beats the market average (experimental)</div>${d.sharp.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
       <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
       <div class="badges"><span class="b ok">${esc(say(c))} @${c.odd.toFixed(2)} best</span>${c.b365 ? `<span class="b">Bet365 ${c.b365.toFixed(2)}</span>` : ''}<span class="b">market chance ${Math.round(c.fair * 100)}% · value ${c.v.toFixed(2)}</span></div></div>`).join('')}` : '';
-  const days = T.days.filter((d, i) => i < 2 || d.picks.length || (d.sharp && d.sharp.length));
+  const over = d => d.over && d.over.length ? `<div class="lg" style="margin-top:10px">Over 2.5 goals — the day’s 3 most likely</div>${d.over.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
+      <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
+      <div class="badges"><span class="b pick">Over 2.5 @${c.odd.toFixed(2)}</span>${c.best ? `<span class="b ok">best ${c.best[0].toFixed(2)}</span>` : ''}<span class="b">chance ${Math.round(c.p * 100)}% (ours ${Math.round(c.ours * 100)}% · bookmaker ${Math.round(c.mkt * 100)}%)</span>${c.started ? '<span class="b">started</span>' : ''}</div></div>`).join('')}` : '';
+  const days = T.days.filter((d, i) => i < 2 || d.picks.length || (d.sharp && d.sharp.length) || (d.over && d.over.length));
   $('#top3').innerHTML = days.map((d, i) => `<div class="card top3"><h3>${dname(d.d, T.days.indexOf(d))}’s Top 3 <span class="note">${d.d}</span></h3>
     ${d.picks.length ? d.picks.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
       <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
       <div class="badges"><span class="b pick">${esc(say(c))} @${c.odd.toFixed(2)}</span>${c.best ? `<span class="b ok" title="Best price across ${c.nb || 'all'} bookmakers">best ${c.best[0].toFixed(2)} · ${esc(c.best[1])}</span>` : ''}<span class="b">${esc(c.kind)}${c.p ? ' · ' + Math.round(c.p * 100) + '%' : ''}</span>${c.started ? '<span class="b">started</span>' : ''}</div>
       <div class="why">${c.why.map(esc).join(' · ')}</div></div>`).join('')
-    : `<div class="note">No strong selections${i ? ' yet — odds arrive with each update.' : ' today.'} A pick needs odds of 1.80 or more and must pass every check (see Method).</div>`}${sharp(d)}</div>`).join('');
+    : `<div class="note">No strong selections${i ? ' yet — odds arrive with each update.' : ' today.'} A pick needs odds of 1.80 or more and must pass every check (see Method).</div>`}${over(d)}${sharp(d)}</div>`).join('');
 }
 function renderResults() {
   const q = $('#q2').value.toLowerCase();
@@ -270,7 +275,7 @@ function renderStats(S, el, live) {
     table('By rule (when the rule fired, did its favoured result happen?)', S.byRule, [['Rule', k => `<td>${RULE[k] || k}</td>`], ['Times', (k, v) => `<td class="n">${v.n}</td>`], ['Correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
     table('By league (10+ matches)', S.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['Underdog', (k, v) => `<td class="n">${pct(v.udHit, v.ud)}</td>`], ['DC', (k, v) => `<td class="n">${pct(v.dc, v.n)}</td>`]], 10);
 }
-const PM = { top3: ['Daily Top 3', 'method'], top3best: ['Daily Top 3 at the best price', 'method'], over25: ['Strong Over 2.5 goals', 'method'], alt: ['Value goal lines (Over/Under 1.5, 3.5, Under 2.5)', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], sharp: ['Price beats the market average (experimental)', 'method'], ratings: ['Ratings pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
+const PM = { top3: ['Daily Top 3', 'method'], top3best: ['Daily Top 3 at the best price', 'method'], over3: ['Over 2.5 — daily 3 most likely', 'method'], over3best: ['Over 2.5 daily 3 at the best price', 'method'], over25: ['Strong Over 2.5 goals', 'method'], alt: ['Value goal lines (Over/Under 1.5, 3.5, Under 2.5)', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], sharp: ['Price beats the market average (experimental)', 'method'], ratings: ['Ratings pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
 const eur = n => (n < 0 ? '−€' : '+€') + Math.abs(n).toFixed(2);
 function renderPaper(S, el) {
   const P = S && S.paper;
@@ -286,7 +291,7 @@ function renderPaper(S, el) {
   }).join('');
   el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets. Each card shows the likely range of the true long-run return: only when the whole range is above zero is it more than luck.</div>
     <div class="card note"><b>Beat later price</b> (closing line value): the first odds we recorded compared with the bookmaker's own chance at the last run before kick-off, with its margin removed. Consistently positive means our picks find prices before the market corrects them — the earliest sign of a real edge, visible long before profit is reliable. Always the favourite shows what “no edge” looks like.</div>
-    <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}` +
+    <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}${top3Hist(P.overRecent, 'Recent Over 2.5 daily 3')}` +
     table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
 }
 const clvLine = c => c && c.n ? `<div class="c" title="First price we saw compared with the bookmaker's later price, margin removed. Positive means we beat the market.">Beat later price: <b style="color:${c.avg >= 0 ? 'var(--win)' : 'var(--loss)'}">${c.avg >= 0 ? '+' : ''}${c.avg.toFixed(1)}%</b> avg · ${c.pos}% of ${c.n}</div>` : '';
@@ -323,10 +328,10 @@ function verdict(a, stake) {
   else { say = 'not proven either way yet'; col = 'var(--mute)'; }
   return `<div class="c" title="The true long-run return is probably somewhere in this range (95%).">Likely range ${f(lo)} to ${f(hi)} · <b style="color:${col}">${say}</b></div>`;
 }
-function top3Hist(h) {
+function top3Hist(h, title = 'Recent Top 3 results') {
   if (!h || !h.length) return '';
   const say = c => /^[OU]\d/.test(c.m) ? `${c.m[0] === 'O' ? 'Over' : 'Under'} ${c.m.slice(1)}` : c.m;
-  return `<div class="card"><h3 style="margin:0 0 6px">Recent Top 3 results</h3><table><tr><th>Day</th><th>Selections</th></tr>${h.map(d => `<tr><td>${d.d}</td><td>${d.picks.map(c => `<span class="b ${c.ok ? 'ok' : 'no'}">${esc(c.hn)} v ${esc(c.an)} · ${say(c)} @${c.odd.toFixed(2)} (${c.sc}) ${c.ok ? '✓' : '✗'}</span>`).join(' ')}</td></tr>`).join('')}</table></div>`;
+  return `<div class="card"><h3 style="margin:0 0 6px">${title}</h3><table><tr><th>Day</th><th>Selections</th></tr>${h.map(d => `<tr><td>${d.d}</td><td>${d.picks.map(c => `<span class="b ${c.ok ? 'ok' : 'no'}">${esc(c.hn)} v ${esc(c.an)} · ${say(c)} @${c.odd.toFixed(2)} (${c.sc}) ${c.ok ? '✓' : '✗'}</span>`).join(' ')}</td></tr>`).join('')}</table></div>`;
 }
 function chart(tl) {
   if (!tl || tl.length < 2) return '';
