@@ -25,7 +25,9 @@ jobs:
         run: node scripts/fdco.js
       - name: Build the backup site
         run: |
-          if grep -q "process.env.SOURCE" scripts/build.js; then SOURCE=fd node scripts/build.js; fi
+          SOURCE=fd node scripts/build.js
+          cp docs/index.html docs/engine.js docs/fd/
+          if [ -f docs/data/backtest.json ]; then cp docs/data/backtest.json docs/fd/data/; fi
       - name: Save
         run: |
           git config user.name "magic-numbers-bot"
