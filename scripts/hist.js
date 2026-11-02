@@ -11,7 +11,9 @@ const KEEP = ['Season', 'Date', 'Time', 'HomeTeam', 'AwayTeam', 'Home', 'Away', 
   'B365H', 'B365D', 'B365A', 'B365>2.5', 'B365<2.5', 'B365CH', 'B365CD', 'B365CA', 'B365C>2.5', 'B365C<2.5',
   'PSH', 'PSD', 'PSA', 'PSCH', 'PSCD', 'PSCA', 'P>2.5', 'P<2.5', 'PC>2.5', 'PC<2.5',
   'MaxH', 'MaxD', 'MaxA', 'Max>2.5', 'Max<2.5', 'MaxCH', 'MaxCD', 'MaxCA', 'MaxC>2.5', 'MaxC<2.5',
-  'AvgH', 'AvgD', 'AvgA', 'Avg>2.5', 'Avg<2.5', 'AvgCH', 'AvgCD', 'AvgCA', 'AvgC>2.5', 'AvgC<2.5'];
+  'AvgH', 'AvgD', 'AvgA', 'Avg>2.5', 'Avg<2.5', 'AvgCH', 'AvgCD', 'AvgCA', 'AvgC>2.5', 'AvgC<2.5',
+  // match statistics (main leagues): half-time goals, shots, shots on target, corners, fouls, cards, referee
+  'HTHG', 'HTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC', 'HF', 'AF', 'HY', 'AY', 'HR', 'AR', 'Referee'];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const out = path.join(ROOT, 'data/hist');
 fs.mkdirSync(out, { recursive: true });
