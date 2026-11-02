@@ -90,6 +90,14 @@ function sharpPicks(x) {
   }
   return out;
 }
+// Daily Over 2.5 Top 3: always the three matches most likely to have 3+ goals, ranked by the average
+// of our goals model and the bookmaker's own chance (margin removed). Historical test 2022–24 (Bet365
+// prices, 593 days): won 61.6% at average odds ~1.59, return −3.8% at Bet365 and −1.0% at the best price.
+function overScore(x) {
+  if (!x.g || !x.od || !x.od['O2.5'] || !x.od['U2.5']) return null;
+  const f = fairProb(x.od, 'O2.5'); return f == null ? null : (x.g.p + f) / 2;
+}
+const overTop = xs => xs.map(x => ({ x, s: overScore(x) })).filter(c => c.s != null).sort((a, b) => b.s - a.s).slice(0, 3);
 const bestOf = (x, m) => (x.best && x.best[m] && x.best[m][0] > ((x.od && x.od[m]) || 0)) ? x.best[m] : null;
 const settled = settledAll.filter(x => x.p).slice().reverse().slice(0, 1000);
 
@@ -106,7 +114,7 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
 for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd, hitTop(c, x));
@@ -118,6 +126,13 @@ for (const [d, xs] of byDay(settledAll)) {
   if (picks.length) top3Hist.push({ d, picks: picks.map(c => ({ hn: c.x.hn, an: c.x.an, m: c.m, odd: c.odd, ok: hitTop(c, c.x), sc: `${c.x.hg}–${c.x.ag}` })) });
 }
 paper.top3Recent = top3Hist.slice(-14).reverse();
+const overHist = [];
+for (const [d, xs] of byDay(settledAll)) {
+  const picks = overTop(xs);
+  for (const c of picks) { addBet('over3', c.x.od['O2.5'], goalHit(c.x)); const bp = bestOf(c.x, 'O2.5'); addBet('over3best', bp ? bp[0] : c.x.od['O2.5'], goalHit(c.x)); }
+  if (picks.length) overHist.push({ d, picks: picks.map(c => ({ hn: c.x.hn, an: c.x.an, m: 'O2.5', odd: c.x.od['O2.5'], ok: goalHit(c.x), sc: `${c.x.hg}–${c.x.ag}` })) });
+}
+paper.overRecent = overHist.slice(-14).reverse();
 
 // Closing line value: did the first price we saw beat the bookmaker's later fair price?
 // value = open odds x latest margin-free probability - 1 (positive = we got a better price
@@ -241,6 +256,8 @@ writeJSON(path.join(out, 'top3.json'), {
   days: (FD ? [0, 1, 2, 3] : [0, 1]).map(o => dayKey(now + o * 864e2)).map(d => ({ d,
     sharp: (T3.get(d) || []).filter(x => x.ts > now).flatMap(sharpPicks).sort((a, b) => b.v - a.v).slice(0, 5)
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
+    over: overTop((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600)).map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, p: Math.round(c.s * 1000) / 1000,
+      ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now })),
     picks: top3(T3.get(d) || []).map(c => ({
     ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
     best: bestOf(c.x, c.m), nb: c.x.nb || null,
