@@ -1,12 +1,13 @@
-// Over 2.5 goals model (not from the book). Fitted on the 2022–23 backtest seasons,
-// checked on 2024: of matches with a 60%+ chance that also pass both "signs", 63.6% went Over 2.5.
-// Inputs: each team's goals for/against over its last 6 matches and the league's
-// running average goals (last 200 matches). Only matches before kick-off are used.
+// Over 2.5 goals model (not from the book). Combines the opponent-adjusted ratings' Over 2.5
+// chance (scripts/ratings.js) with each team's goals for/against over its last 6 matches and the
+// league's running average goals (last 200 matches). Fitted on 2022–23, checked on 2024: matches
+// with a 60%+ chance that also pass both "signs" went Over 2.5 64.5% of the time (834 matches).
+// Only matches before kick-off are used.
 const fs = require('fs');
 const path = require('path');
 const { ROOT, readJSON, FINISHED } = require('./lib');
 
-const W = { hFor: 0.2027, hAg: -0.0143, aFor: 0.0708, aAg: 0.0805, lg: 0.6561, b: -2.1726 };
+const W = { r: 0.7514, lg: 0.2403, hFor: 0.0381, hAg: -0.1248, aFor: -0.0575, aAg: -0.0582, b: -0.3469 };
 const RULES = {
   minProb: 0.60,     // our chance of 3+ goals
   minXg: 3.0,        // both teams' average goals per game (scored + conceded), combined
@@ -38,7 +39,7 @@ function seedLeagues() {
 }
 
 // Walk all fixtures in kick-off order; returns Map fixtureId -> goals info.
-function goalsModel(rows, { seed = true } = {}) {
+function goalsModel(rows, R, { seed = true } = {}) {
   const list = rows.filter(r => !/friendl/i.test(r.ln || '') && !DEAD.has(r.st)).sort((a, b) => a.ts - b.ts || a.id - b.id);
   const team = new Map(), league = seed ? seedLeagues() : new Map(), out = new Map();
   const T = id => { if (!team.has(id)) team.set(id, []); return team.get(id); };
@@ -49,10 +50,12 @@ function goalsModel(rows, { seed = true } = {}) {
     const group = list.slice(i, j);
     for (const r of group) {
       const H = T(r.h).slice(-6), A = T(r.a).slice(-6), lg = L(r.lg).slice(-200);
-      if (H.length < 6 || A.length < 6 || lg.length < 30) { out.set(r.id, null); continue; }
+      const rt = R.get(r.id);
+      if (H.length < 6 || A.length < 6 || lg.length < 30 || !rt) { out.set(r.id, null); continue; }
       const avg = (x, k) => x.reduce((s, g) => s + g[k], 0) / x.length;
       const f = { hFor: avg(H, 0), hAg: avg(H, 1), aFor: avg(A, 0), aAg: avg(A, 1), lg: lg.reduce((s, g) => s + g, 0) / lg.length };
-      const z = W.b + W.hFor * f.hFor + W.hAg * f.hAg + W.aFor * f.aFor + W.aAg * f.aAg + W.lg * f.lg;
+      const pr = Math.min(0.999, Math.max(0.001, rt.over));
+      const z = W.b + W.r * Math.log(pr / (1 - pr)) + W.lg * f.lg + W.hFor * f.hFor + W.hAg * f.hAg + W.aFor * f.aFor + W.aAg * f.aAg;
       out.set(r.id, {
         p: 1 / (1 + Math.exp(-z)),
         xg: (f.hFor + f.hAg + f.aFor + f.aAg) / 2,

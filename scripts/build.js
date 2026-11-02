@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { ROOT, readJSON, writeJSON, evaluate, stats, slim } = require('./lib');
 const { goalsModel, judge, RULES, fairProb } = require('./goals');
+const { ratingsModel } = require('./ratings');
 
 const dir = path.join(ROOT, 'data/days');
 const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort() : [];
@@ -10,34 +11,41 @@ const byId = new Map();
 for (const f of files) for (const r of readJSON(path.join(dir, f), { rows: [] }).rows) byId.set(r.id, r); // newer files win
 
 const { results, hist } = evaluate([...byId.values()]);
-const G = goalsModel([...byId.values()]);
+const R = ratingsModel([...byId.values()]);
+const G = goalsModel([...byId.values()], R);
 const now = Date.now() / 1000;
 
 const odds = readJSON(path.join(ROOT, 'data/odds.json'), {});
 const withOdds = x => {
   const o = odds[x.id]; if (o && o.m && Object.keys(o.m).length) { x.od = o.m; x.bm = o.bm; if (o.open && o.open.at < o.at) x.op = o.open.m; }
   const g = judge(G.get(x.id), x.od); if (g) x.g = g;
+  const r = R.get(x.id);
+  if (r) { const p = { '1': r.H, X: r.D, '2': r.A }, r3 = v => Math.round(v * 1000) / 1000;
+    x.r = { '1': r3(r.H), X: r3(r.D), '2': r3(r.A), pick: Object.keys(p).sort((a, b) => p[b] - p[a])[0], lh: Math.round(r.lh * 100) / 100, la: Math.round(r.la * 100) / 100 }; }
   return x;
 };
 const upcoming = results
   .filter(x => !x.outcome && x.row.ts > now - 3 * 3600 && x.row.ts < now + 2 * 864e2)
   .map(slim).map(withOdds);
-const settledAll = results.filter(x => x.outcome && (x.pred || G.get(x.row.id))).map(slim).map(withOdds);
+const settledAll = results.filter(x => x.outcome && (x.pred || G.get(x.row.id) || R.get(x.row.id))).map(slim).map(withOdds);
 
 // Daily Top 3 (per UTC calendar day): strong Over 2.5 selections first, ranked by value;
 // remaining places go to the book's 1/X/2 picks (high/medium confidence, odds 1.80–4.00,
-// bookmaker margin ≤ 8%), ranked by the book's own margin. One selection per match.
-const BOOK = { minOdds: 1.80, maxOdds: 4.0, maxMargin: 0.08 };
-const bookMargin = s => { const v = Object.values(s).sort((a, b) => b - a), t = v.reduce((a, b) => a + b, 0); return t ? (v[0] - v[1]) / t : 0; };
+// bookmaker margin ≤ 8%) that the ratings model also rates as value (its chance x odds ≥ 1.05),
+// ranked by that value. One selection per match.
+const BOOK = { minOdds: 1.80, maxOdds: 4.0, maxMargin: 0.08, minEdge: 1.05 };
+const pct0 = v => `${Math.round(v * 100)}%`;
 function top3(xs) {
   const over = xs.filter(x => x.g && x.g.strong).sort((a, b) => b.g.edge - a.g.edge)
-    .map(x => ({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, why: x.g.pass }));
+    .map(x => ({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, p: x.g.p, why: x.g.pass }));
   const book = xs.filter(x => {
-    if (!(x.p && x.od && (x.p.conf === 'high' || x.p.conf === 'medium'))) return false;
+    if (!(x.p && x.r && x.od && (x.p.conf === 'high' || x.p.conf === 'medium'))) return false;
     const odd = x.od[x.p.pick], mg = x.od['1'] && x.od.X && x.od['2'] ? 1 / x.od['1'] + 1 / x.od.X + 1 / x.od['2'] - 1 : 1;
-    return odd >= BOOK.minOdds && odd <= BOOK.maxOdds && mg <= BOOK.maxMargin;
-  }).sort((a, b) => bookMargin(b.p.s) - bookMargin(a.p.s))
-    .map(x => ({ x, m: x.p.pick, kind: 'Book’s pick', odd: x.od[x.p.pick], why: [`${x.p.conf} confidence`, ...x.p.why.slice(0, 3)] }));
+    return odd >= BOOK.minOdds && odd <= BOOK.maxOdds && mg <= BOOK.maxMargin && x.r[x.p.pick] * odd >= BOOK.minEdge;
+  }).sort((a, b) => b.r[b.p.pick] * b.od[b.p.pick] - a.r[a.p.pick] * a.od[a.p.pick])
+    .map(x => { const odd = x.od[x.p.pick], rp = x.r[x.p.pick], fp = fairProb(x.od, x.p.pick);
+      return { x, m: x.p.pick, kind: 'Book’s pick', odd, p: rp,
+        why: [`ratings chance ${pct0(rp)}${fp != null ? ` vs bookmaker ${pct0(fp)}` : ''}`, `value ${(rp * odd).toFixed(2)}`, `${x.p.conf} confidence`, ...x.p.why.slice(0, 2)] }; });
   const seen = new Set(), out = [];
   for (const c of [...over, ...book]) { if (out.length === 3) break; if (seen.has(c.x.id)) continue; seen.add(c.x.id); out.push(c); }
   return out;
@@ -53,6 +61,7 @@ const STAKE = 10;
 const hitM = (m, o) => ({ '1': o === 'H', X: o === 'D', '2': o === 'A', '1X': o !== 'A', X2: o !== 'H', '12': o !== 'D' })[m];
 const MK = {
   pick: x => x.p.pick,
+  ratings: x => x.r && x.r.pick,
   dc: x => x.p.dc,
   underdog: x => x.p.ud,
   home: () => '1',
@@ -83,6 +92,7 @@ const addClv = (k, x, mk) => {
 };
 for (const x of settledAll) {
   if (!x.od) continue;
+  if (x.p && x.r) addClv('ratings', x, x.r.pick);
   if (x.p) { addClv('pick', x, x.p.pick); addClv('home', x, '1'); const fav = MK.favourite(x); if (fav) addClv('favourite', x, fav); }
   if (x.g && x.g.strong) addClv('over25', x, 'O2.5');
 }
@@ -96,6 +106,7 @@ const vm = {};
 const addVm = (k, x, mk, ok) => { const fp = fairProb(x.od, mk); if (fp == null) return; const a = (vm[k] ||= { n: 0, hit: 0, exp: 0 }); a.n++; if (ok) a.hit++; a.exp += fp; };
 for (const x of settledAll) {
   if (!x.od) continue;
+  if (x.p && x.r) addVm('ratings', x, x.r.pick, hitM(x.r.pick, x.o));
   if (x.p) { addVm('pick', x, x.p.pick, hitM(x.p.pick, x.o)); addVm('home', x, '1', x.o === 'H'); const fav = MK.favourite(x); if (fav) addVm('favourite', x, fav, hitM(fav, x.o)); }
   if (x.g && x.g.strong) addVm('over25', x, 'O2.5', goalHit(x));
 }
@@ -103,13 +114,17 @@ for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addVm('top3', 
 for (const k in vm) { const a = vm[k]; vm[k] = { n: a.n, hit: Math.round(1000 * a.hit / a.n) / 10, exp: Math.round(1000 * a.exp / a.n) / 10 }; }
 // Accuracy scores (Brier: lower is better; 0 = perfect). Over 2.5: our model vs the bookmaker
 // vs a flat 50%. 1X2: the book's rule scores turned into shares vs the bookmaker's fair chances.
-const br = { over: { n: 0, model: 0, market: 0, flat: 0 }, book: { n: 0, model: 0, market: 0, flat: 0 } };
+const br = { over: { n: 0, model: 0, market: 0, flat: 0 }, ratings: { n: 0, model: 0, market: 0, flat: 0 }, book: { n: 0, model: 0, market: 0, flat: 0 } };
 for (const x of settledAll) {
   if (x.g && x.g.fair != null) {
     const y = goalHit(x) ? 1 : 0, a = br.over;
     a.n++; a.model += (x.g.p - y) ** 2; a.market += (x.g.fair - y) ** 2; a.flat += (0.5 - y) ** 2;
   }
   const f = x.od && ['1', 'X', '2'].map(k => fairProb(x.od, k));
+  if (x.r && f && f.every(v => v != null)) {
+    const rk = [x.r['1'], x.r.X, x.r['2']], y = ['H', 'D', 'A'].map(o => (x.o === o ? 1 : 0)), a = br.ratings;
+    a.n++; for (let i = 0; i < 3; i++) { a.model += (rk[i] - y[i]) ** 2; a.market += (f[i] - y[i]) ** 2; a.flat += (1 / 3 - y[i]) ** 2; }
+  }
   if (x.p && f && f.every(v => v != null)) {
     const t = x.p.s.H + x.p.s.D + x.p.s.A; if (!t) continue;
     const bk = [x.p.s.H / t, x.p.s.D / t, x.p.s.A / t], y = ['H', 'D', 'A'].map(o => (x.o === o ? 1 : 0)), a = br.book;
@@ -119,14 +134,13 @@ for (const x of settledAll) {
 for (const k in br) { const a = br[k]; for (const m of ['model', 'market', 'flat']) a[m] = a.n ? Math.round(10000 * a[m] / a.n) / 10000 : null; }
 paper.vsMarket = vm; paper.brier = br;
 
-// Edge-sized stakes (quarter Kelly) for selections with our own chance (Over 2.5). Notional
-// €1,000 bank, not compounding, max 5% (€50) per bet. Book picks have no chance estimate,
-// so inside the sized Top 3 they keep the flat €10 stake.
+// Edge-sized stakes (quarter Kelly): Over 2.5 uses the goals model's chance, book picks use the
+// ratings model's chance. Notional €1,000 bank, not compounding, max 5% (€50) per bet.
 const BANK = 1000, kStake = (p, o) => Math.max(0, Math.min(0.05, 0.25 * (p * o - 1) / (o - 1))) * BANK;
 paper.sized = { bank: BANK, over25: { bets: 0, won: 0, staked: 0, profit: 0 }, top3: { bets: 0, won: 0, staked: 0, profit: 0 } };
 const addSized = (k, st, odd, ok) => { const a = paper.sized[k]; if (!(st > 0)) return; a.bets++; a.staked += st; if (ok) a.won++; a.profit += ok ? st * (odd - 1) : -st; };
 for (const x of settledAll) if (x.g && x.g.strong) addSized('over25', kStake(x.g.p, x.g.o), x.g.o, goalHit(x));
-for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addSized('top3', c.m === 'O2.5' ? kStake(c.x.g.p, c.odd) : STAKE, c.odd, hitTop(c, c.x));
+for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addSized('top3', kStake(c.p, c.odd), c.odd, hitTop(c, c.x));
 for (const k of ['over25', 'top3']) { const a = paper.sized[k]; a.staked = Math.round(a.staked * 100) / 100; a.profit = Math.round(a.profit * 100) / 100; }
 const cum = Object.fromEntries(Object.keys(MK).map(k => [k, 0]));
 const days = new Map();
@@ -182,7 +196,7 @@ const T3 = byDay(allDay);
 writeJSON(path.join(out, 'top3.json'), {
   rules: { over: RULES, book: BOOK },
   days: [0, 1].map(o => dayKey(now + o * 864e2)).map(d => ({ d, picks: top3(T3.get(d) || []).map(c => ({
-    ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.m === 'O2.5' ? c.x.g.p : null, started: c.x.ts <= now,
+    ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
   })) })),
 });
 console.log(`days=${files.length} fixtures=${byId.size} teamsReady=${ready}/${hist.size} upcoming=${upcoming.length} (predicted ${S.meta.upcomingPredicted}) graded=${S.graded}`);
