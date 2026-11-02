@@ -123,6 +123,37 @@ function slipLegs(xs) {
   }
   return legs.length >= SLIP.minLegs ? { legs, odds: tot, chance: legs.reduce((s, c) => s * c.p, 1) } : null;
 }
+// Filter lab rule 5 (PASSED: 2024/25 +18.1% over 273 bets, 2025/26 +8.9% over 361, at the best price):
+// in the last 6 rounds, back a team within 3 points of the relegation line or of 3rd place against a
+// mid-table team 6+ points clear of both. Only leagues with a plain double round-robin season.
+const MOTIV_LEAGUES = new Set(['Premier League|England', 'Championship|England', 'League One|England', 'League Two|England', 'La Liga|Spain', 'Segunda División|Spain',
+  'Serie A|Italy', 'Serie B|Italy', 'Bundesliga|Germany', '2. Bundesliga|Germany', 'Ligue 1|France', 'Ligue 2|France', 'Eredivisie|Netherlands', 'Primeira Liga|Portugal', 'Süper Lig|Turkey']);
+const MOTIV = new Map();
+if (FD) {
+  const byLg = new Map();
+  for (const r of [...byId.values()].sort((a, b) => a.ts - b.ts)) {
+    if (!MOTIV_LEAGUES.has(`${r.ln}|${r.lc}`)) continue;
+    if (!byLg.has(r.lg)) byLg.set(r.lg, []); byLg.get(r.lg).push(r);
+  }
+  for (const rows of byLg.values()) {
+    const teams = [...new Set(rows.flatMap(r => [r.h, r.a]))], N = teams.length, total = 2 * (N - 1);
+    const pts = Object.fromEntries(teams.map(t => [t, 0])), gd = { ...pts }, pl = { ...pts };
+    for (const r of rows) {
+      const tab = [...teams].sort((a, b) => pts[b] - pts[a] || gd[b] - gd[a]);
+      const rel = pts[tab[N - 3]], top = pts[tab[2]], remaining = total - pl[r.h];
+      if (N >= 10 && remaining <= 6) {
+        const mot = p => Math.abs(p - rel) <= 3 || Math.abs(p - top) <= 3, free = p => p - rel >= 6 && top - p >= 6;
+        const pick = mot(pts[r.h]) && free(pts[r.a]) ? '1' : mot(pts[r.a]) && free(pts[r.h]) ? '2' : null;
+        if (pick) MOTIV.set(r.id, { m: pick, why: `${remaining} rounds left · ${pick === '1' ? r.hn : r.an} is fighting (relegation or top 3) v a mid-table side with nothing to play for` });
+      }
+      if (r.st !== 'FT' || r.hg == null) continue;
+      const res = r.hg > r.ag ? 'H' : r.hg < r.ag ? 'A' : 'D';
+      pts[r.h] += res === 'H' ? 3 : res === 'D' ? 1 : 0; pts[r.a] += res === 'A' ? 3 : res === 'D' ? 1 : 0;
+      gd[r.h] += r.hg - r.ag; gd[r.a] += r.ag - r.hg; pl[r.h]++; pl[r.a]++;
+    }
+  }
+}
+const motivPick = x => { const v = MOTIV.get(x.id); if (!v || !x.od || !x.od[v.m]) return null; return { x, m: v.m, odd: priceOf(x, v.m), b365: x.od[v.m], why: v.why }; };
 const isWeekend = d => [0, 6].includes(new Date(d + 'T12:00:00Z').getUTCDay());
 const bestOf = (x, m) => (x.best && x.best[m] && x.best[m][0] > ((x.od && x.od[m]) || 0)) ? x.best[m] : null;
 const settled = settledAll.filter(x => x.p).slice().reverse().slice(0, 1000);
@@ -140,7 +171,8 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best', 'slip']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best', 'slip', 'motiv']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const x of settledAll) { const c = motivPick(x); if (c) addBet('motiv', c.odd, hitTop(c, x)); }
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
 for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd, hitTop(c, x));
@@ -297,6 +329,8 @@ writeJSON(path.join(out, 'top3.json'), {
       ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now })),
     slip: isWeekend(d) ? (s => s && { odds: Math.round(s.odds * 100) / 100, chance: Math.round(s.chance * 10000) / 10000,
       legs: s.legs.map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, p: Math.round(c.p * 1000) / 1000, started: c.x.ts <= now })) })(slipLegs((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600))) : null,
+    proven: (T3.get(d) || []).filter(x => x.ts > now - 3 * 3600).map(motivPick).filter(Boolean)
+      .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, b365: c.b365, rule: 'End of season: motivated v nothing to play for', why: c.why })),
     picks: top3(T3.get(d) || []).map(c => ({
     ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
     best: bestOf(c.x, c.m), nb: c.x.nb || null,
