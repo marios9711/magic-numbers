@@ -1,0 +1,36 @@
+name: Backup source (football-data.co.uk)
+
+on:
+  schedule:
+    - cron: '47 6 * * *'   # 08:47 Cyprus time (winter)
+    - cron: '47 16 * * *'  # 18:47 Cyprus time
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Download results and upcoming fixtures with odds (no API key)
+        run: node scripts/fdco.js
+      - name: Build the backup site
+        run: |
+          if grep -q "process.env.SOURCE" scripts/build.js; then SOURCE=fd node scripts/build.js; fi
+      - name: Save
+        run: |
+          git config user.name "magic-numbers-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/fdco docs
+          git diff --cached --quiet || git commit -m "Backup source update $(date -u +%F\ %H:%M)"
+          git pull --rebase
+          git push
