@@ -98,9 +98,9 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
   <section id="method" class="hide">
     <div class="card">
       <h3>Daily Top 3</h3>
-      <p>Up to three selections per day, never more than one per match. Strong <b>Over 2.5 goals</b> selections come first (best value first); any places left go to the <b>book’s 1 / X / 2 pick</b> with high or medium confidence, odds between 1.80 and 4.00 and a bookmaker margin of 8% or less, ranked by the book’s own margin. If nothing qualifies, the list stays short or empty. Every Top 3 selection is tracked under Paper betting.</p>
+      <p>Up to three selections per day, never more than one per match. Strong <b>Over 2.5 goals</b> selections come first (best value first); any places left go to the <b>book’s 1 / X / 2 pick</b> with high or medium confidence, odds between 1.80 and 4.00, a bookmaker margin of 8% or less, and value according to the ratings model (its chance for that result × odds ≥ 1.05), best value first. If nothing qualifies, the list stays short or empty. Every Top 3 selection is tracked under Paper betting.</p>
       <h3>Over 2.5 goals (not from the book)</h3>
-      <p>A statistical model built on the 2022–24 backtest seasons. It uses each team's goals scored and conceded over its last 6 matches (all competitions) and the league's average goals over its last 200 matches. A selection counts as <b>strong</b> only if it passes every check:</p>
+      <p>A statistical model built on the 2022–24 backtest seasons. It combines the ratings model’s Over 2.5 chance (below) with each team's goals scored and conceded over its last 6 matches (all competitions) and the league's average goals over its last 200 matches. A selection counts as <b>strong</b> only if it passes every check:</p>
       <ul>
         <li>Both teams have 6+ recorded matches and the league has 30+.</li>
         <li>Our chance of 3+ goals is <b>60% or more</b>.</li>
@@ -110,7 +110,10 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
         <li>Bookmaker margin on Over/Under 2.5 is 8% or less.</li>
         <li>Not a cup match (rotation risk); friendlies are always excluded.</li>
       </ul>
-      <p class="note">On the 2024 test season, matches passing the chance and form checks went Over 2.5 63.6% of the time (break-even at odds 1.80 is 55.6%). The odds checks can only be proven live, so results are tracked separately.</p>
+      <p class="note">On the 2024 test season, matches passing the chance and form checks went Over 2.5 64.5% of the time (break-even at odds 1.80 is 55.6%). The odds checks can only be proven live, so results are tracked separately.</p>
+      <h3>Ratings model (not from the book)</h3>
+      <p>Every team has an attack and a defence rating, and every league a scoring level and a home advantage. Expected goals for each side come from these; after each match the ratings move a little towards what happened (allowing for how strong the opponent was) and drift slightly back towards average, so a few results don't swing them too far. Expected goals are turned into the chance of every scoreline, and from those the chances of 1, X, 2 and Over 2.5. A team needs 6 recorded matches.</p>
+      <p class="note">2024 test season: the ratings pick was right 48.4% of the time (always home 44.1%, book’s method 28.6%). It is shown next to the book’s pick and tracked separately; the book stays the source of the 1 / X / 2 selections, and the ratings chance is used to check their value and size their paper stakes.</p>
     </div>
     <div class="card">
       <h3>How predictions are made</h3>
@@ -162,6 +165,11 @@ function matchRow(x, settled) {
     if (settled) badges = mk(p.pick, 'pick', 'Pick ') + (p.ud ? mk(p.ud, '', 'Underdog ') : '') + mk(p.dc, '', 'DC ');
     if (x.od) badges += `<span class="b" title="${esc(x.bm || '')} odds">odds ${['1', 'X', '2'].map(k => x.od[k] ? x.od[k].toFixed(2) : '–').join(' / ')}</span>`;
   } else badges = '<span class="b">not enough history</span>';
+  if (x.r) {
+    const rp = x.r[x.r.pick], at2 = x.od && x.od[x.r.pick] ? ` @${x.od[x.r.pick].toFixed(2)}` : '';
+    if (settled) { const ok = Engine.hit(x.r.pick, x.o); badges += `<span class="b ${ok ? 'ok' : 'no'}">Ratings ${x.r.pick} ${ok ? '✓' : '✗'}</span>`; }
+    else badges += `<span class="b" title="Ratings model 1/X/2 pick and its chance">Ratings ${x.r.pick} ${Math.round(rp * 100)}%${at2}</span>`;
+  }
   if (x.g) {
     const ov = `O2.5 ${Math.round(x.g.p * 100)}%${x.g.o ? ' @' + x.g.o.toFixed(2) : ''}`;
     if (settled && x.g.strong) { const ok = x.hg + x.ag > 2; badges += `<span class="b ${ok ? 'ok' : 'no'}">${ov} ${ok ? '✓' : '✗'}</span>`; }
@@ -169,7 +177,8 @@ function matchRow(x, settled) {
   }
   const score = settled ? `<span class="sc">${x.hg}–${x.ag}</span>` : ' v ';
   const gdet = x.g ? `<div>Over 2.5: ${x.g.strong ? '<b>strong selection</b>' : 'not strong'}${x.g.fair != null ? ` (our chance ${Math.round(x.g.p * 100)}% vs bookmaker ${Math.round(x.g.fair * 100)}%)` : ''} — ${[...x.g.pass.map(t => '✓ ' + esc(t)), ...x.g.fail.map(t => '✗ ' + esc(t))].join(' · ')}</div>` : '';
-  const det = !p && x.g ? `<div class="det">${gdet}</div>` : p ? `<div class="det">${gdet}${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
+  const rdet = x.r ? `<div>Ratings: 1 ${Math.round(x.r['1'] * 100)}% · X ${Math.round(x.r.X * 100)}% · 2 ${Math.round(x.r['2'] * 100)}% — expected goals ${x.r.lh.toFixed(2)}–${x.r.la.toFixed(2)}${x.od && x.od['1'] && x.od.X && x.od['2'] ? ` · bookmaker ${['1', 'X', '2'].map(k => Math.round(100 * (1 / x.od[k]) / (1 / x.od['1'] + 1 / x.od.X + 1 / x.od['2'])) + '%').join(' / ')}` : ''}</div>` : '';
+  const det = !p && (x.g || x.r) ? `<div class="det">${rdet}${gdet}</div>` : p ? `<div class="det">${rdet}${gdet}${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
     <div>Scores — 1: ${p.s.H} · X: ${p.s.D} · 2: ${p.s.A}</div><ul>${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
   return `<div class="m ${p && !settled ? 'conf-' + p.conf : ''}" onclick="this.classList.toggle('open')">
     <div class="t">${settled ? dayLabel(x.ts).split(' ').slice(1).join(' ') : time(x.ts)}</div>
@@ -239,7 +248,7 @@ function renderStats(S, el, live) {
     table('By rule (when the rule fired, did its favoured result happen?)', S.byRule, [['Rule', k => `<td>${RULE[k] || k}</td>`], ['Times', (k, v) => `<td class="n">${v.n}</td>`], ['Correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
     table('By league (10+ matches)', S.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['Underdog', (k, v) => `<td class="n">${pct(v.udHit, v.ud)}</td>`], ['DC', (k, v) => `<td class="n">${pct(v.dc, v.n)}</td>`]], 10);
 }
-const PM = { top3: ['Daily Top 3', 'method'], over25: ['Strong Over 2.5 goals', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
+const PM = { top3: ['Daily Top 3', 'method'], over25: ['Strong Over 2.5 goals', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], ratings: ['Ratings pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
 const eur = n => (n < 0 ? '−€' : '+€') + Math.abs(n).toFixed(2);
 function renderPaper(S, el) {
   const P = S && S.paper;
@@ -269,14 +278,14 @@ function vsMarket(P) {
     <p class="note">How often each bet won compared with how often the bookmaker's own price (margin removed) said it should. A positive gap means our selections win more often than the market expects.</p>
     ${rows ? `<table><tr><th>Bet</th><th>Bets</th><th>Won</th><th>Bookmaker expected</th><th>Gap (points)</th></tr>${rows}</table>` : ''}
     ${B.over && B.over.n || B.book && B.book.n ? `<p class="note" style="margin-top:12px">Accuracy score (Brier — lower is better). Ours is in bold green when it beats the bookmaker.</p>
-    <table><tr><th>Market</th><th>Matches</th><th>Ours</th><th>Bookmaker</th><th>Flat guess</th></tr>${bRow('Over 2.5 goals (goals model)', B.over)}${bRow('1 / X / 2 (book’s rule scores)', B.book)}</table>` : ''}</div>`;
+    <table><tr><th>Market</th><th>Matches</th><th>Ours</th><th>Bookmaker</th><th>Flat guess</th></tr>${bRow('Over 2.5 goals (goals model)', B.over)}${bRow('1 / X / 2 (ratings model)', B.ratings)}${bRow('1 / X / 2 (book’s rule scores)', B.book)}</table>` : ''}</div>`;
 }
 function sized(S) {
   if (!S || !(S.over25.bets || S.top3.bets)) return '';
   const card = (label, a) => { const roi = a.staked ? 100 * a.profit / a.staked : 0; return `<div class="card kpi"><div class="l">${label} <span class="b">sized by edge</span></div>
     <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
     <div class="c">${a.bets} bets · €${a.staked.toFixed(0)} staked · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div></div>`; };
-  return `<div class="card note">Edge-sized stakes: a quarter of the Kelly amount from a notional €${S.bank} bank (max €${S.bank * 0.05} a bet), so bigger edges get bigger stakes. Only Over 2.5 has our own chance estimate; book picks in the Top 3 stay at €10.</div>
+  return `<div class="card note">Edge-sized stakes: a quarter of the Kelly amount from a notional €${S.bank} bank (max €${S.bank * 0.05} a bet), so bigger edges get bigger stakes. Over 2.5 uses the goals model’s chance; the book’s picks use the ratings model’s chance for that result.</div>
     <div class="grid">${card('Strong Over 2.5 goals', S.over25)}${card('Daily Top 3', S.top3)}</div>`;
 }
 function top3Hist(h) {
