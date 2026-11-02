@@ -21,7 +21,10 @@ function markets(bm) {
       const odd = Number(v.odd);
       if (!(odd > 1)) continue;
       const k = name === 'match winner' ? { Home: '1', Draw: 'X', Away: '2' }[v.value]
-        : name === 'double chance' ? { 'Home/Draw': '1X', 'Draw/Away': 'X2', 'Home/Away': '12' }[v.value] : null;
+        : name === 'double chance' ? { 'Home/Draw': '1X', 'Draw/Away': 'X2', 'Home/Away': '12' }[v.value]
+        // Total goals: keys like "O2.5" / "U2.5" (also 1.5 and 3.5 lines for later testing).
+        : name === 'goals over/under' ? (/^(Over|Under) (1\.5|2\.5|3\.5)$/.exec(v.value) || []).slice(1).map((s, i) => i ? s : s[0]).join('') || null
+        : null;
       if (k) m[k] = odd;
     }
   }
