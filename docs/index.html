@@ -168,7 +168,7 @@ function matchRow(x, settled) {
     else if (!settled) badges += `<span class="b${x.g.strong ? ' pick' : ''}" title="Over 2.5 goals">${x.g.strong ? '★ ' : ''}${ov}</span>`;
   }
   const score = settled ? `<span class="sc">${x.hg}–${x.ag}</span>` : ' v ';
-  const gdet = x.g ? `<div>Over 2.5: ${x.g.strong ? '<b>strong selection</b>' : 'not strong'} — ${[...x.g.pass.map(t => '✓ ' + esc(t)), ...x.g.fail.map(t => '✗ ' + esc(t))].join(' · ')}</div>` : '';
+  const gdet = x.g ? `<div>Over 2.5: ${x.g.strong ? '<b>strong selection</b>' : 'not strong'}${x.g.fair != null ? ` (our chance ${Math.round(x.g.p * 100)}% vs bookmaker ${Math.round(x.g.fair * 100)}%)` : ''} — ${[...x.g.pass.map(t => '✓ ' + esc(t)), ...x.g.fail.map(t => '✗ ' + esc(t))].join(' · ')}</div>` : '';
   const det = !p && x.g ? `<div class="det">${gdet}</div>` : p ? `<div class="det">${gdet}${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
     <div>Scores — 1: ${p.s.H} · X: ${p.s.D} · 2: ${p.s.A}</div><ul>${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
   return `<div class="m ${p && !settled ? 'conf-' + p.conf : ''}" onclick="this.classList.toggle('open')">
@@ -251,12 +251,14 @@ function renderPaper(S, el) {
     const a = P.markets[k] || { bets: 0, won: 0, profit: 0 }, roi = a.bets ? 100 * a.profit / (a.bets * P.stake) : 0;
     return `<div class="card kpi"><div class="l">${label}${kind === 'baseline' ? ' <span class="b">comparison</span>' : ''}</div>
       <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
-      <div class="c">${a.bets} bets · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div></div>`;
+      <div class="c">${a.bets} bets · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div>${clvLine(P.clv && P.clv[k])}</div>`;
   }).join('');
   el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets.</div>
+    <div class="card note"><b>Beat later price</b> (closing line value): the first odds we recorded compared with the bookmaker's own chance at the last run before kick-off, with its margin removed. Consistently positive means our picks find prices before the market corrects them — the earliest sign of a real edge, visible long before profit is reliable. Always the favourite shows what “no edge” looks like.</div>
     <div class="grid">${cards}</div>${chart(P.timeline)}${top3Hist(P.top3Recent)}` +
     table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
 }
+const clvLine = c => c && c.n ? `<div class="c" title="First price we saw compared with the bookmaker's later price, margin removed. Positive means we beat the market.">Beat later price: <b style="color:${c.avg >= 0 ? 'var(--win)' : 'var(--loss)'}">${c.avg >= 0 ? '+' : ''}${c.avg.toFixed(1)}%</b> avg · ${c.pos}% of ${c.n}</div>` : '';
 function top3Hist(h) {
   if (!h || !h.length) return '';
   const say = c => c.m === 'O2.5' ? 'Over 2.5' : c.m;
