@@ -255,10 +255,30 @@ function renderPaper(S, el) {
   }).join('');
   el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets.</div>
     <div class="card note"><b>Beat later price</b> (closing line value): the first odds we recorded compared with the bookmaker's own chance at the last run before kick-off, with its margin removed. Consistently positive means our picks find prices before the market corrects them — the earliest sign of a real edge, visible long before profit is reliable. Always the favourite shows what “no edge” looks like.</div>
-    <div class="grid">${cards}</div>${chart(P.timeline)}${top3Hist(P.top3Recent)}` +
+    <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}` +
     table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
 }
 const clvLine = c => c && c.n ? `<div class="c" title="First price we saw compared with the bookmaker's later price, margin removed. Positive means we beat the market.">Beat later price: <b style="color:${c.avg >= 0 ? 'var(--win)' : 'var(--loss)'}">${c.avg >= 0 ? '+' : ''}${c.avg.toFixed(1)}%</b> avg · ${c.pos}% of ${c.n}</div>` : '';
+function vsMarket(P) {
+  const V = P.vsMarket || {}, B = P.brier || {}, keys = Object.keys(PM).filter(k => V[k] && V[k].n);
+  if (!keys.length && !(B.over && B.over.n)) return '';
+  const gap = v => { const d = v.hit - v.exp; return `<td class="n" style="color:${d >= 0 ? 'var(--win)' : 'var(--loss)'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}</td>`; };
+  const rows = keys.map(k => `<tr><td>${PM[k][0]}</td><td class="n">${V[k].n}</td><td class="n">${V[k].hit.toFixed(1)}%</td><td class="n">${V[k].exp.toFixed(1)}%</td>${gap(V[k])}</tr>`).join('');
+  const bRow = (label, a) => a && a.n ? `<tr><td>${label}</td><td class="n">${a.n}</td><td class="n"${a.model <= a.market ? ' style="color:var(--win);font-weight:700"' : ''}>${a.model.toFixed(4)}</td><td class="n">${a.market.toFixed(4)}</td><td class="n">${a.flat.toFixed(4)}</td></tr>` : '';
+  return `<div class="card"><h3 style="margin:0 0 6px">Against the bookmaker</h3>
+    <p class="note">How often each bet won compared with how often the bookmaker's own price (margin removed) said it should. A positive gap means our selections win more often than the market expects.</p>
+    ${rows ? `<table><tr><th>Bet</th><th>Bets</th><th>Won</th><th>Bookmaker expected</th><th>Gap (points)</th></tr>${rows}</table>` : ''}
+    ${B.over && B.over.n || B.book && B.book.n ? `<p class="note" style="margin-top:12px">Accuracy score (Brier — lower is better). Ours is in bold green when it beats the bookmaker.</p>
+    <table><tr><th>Market</th><th>Matches</th><th>Ours</th><th>Bookmaker</th><th>Flat guess</th></tr>${bRow('Over 2.5 goals (goals model)', B.over)}${bRow('1 / X / 2 (book’s rule scores)', B.book)}</table>` : ''}</div>`;
+}
+function sized(S) {
+  if (!S || !(S.over25.bets || S.top3.bets)) return '';
+  const card = (label, a) => { const roi = a.staked ? 100 * a.profit / a.staked : 0; return `<div class="card kpi"><div class="l">${label} <span class="b">sized by edge</span></div>
+    <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
+    <div class="c">${a.bets} bets · €${a.staked.toFixed(0)} staked · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div></div>`; };
+  return `<div class="card note">Edge-sized stakes: a quarter of the Kelly amount from a notional €${S.bank} bank (max €${S.bank * 0.05} a bet), so bigger edges get bigger stakes. Only Over 2.5 has our own chance estimate; book picks in the Top 3 stay at €10.</div>
+    <div class="grid">${card('Strong Over 2.5 goals', S.over25)}${card('Daily Top 3', S.top3)}</div>`;
+}
 function top3Hist(h) {
   if (!h || !h.length) return '';
   const say = c => c.m === 'O2.5' ? 'Over 2.5' : c.m;
