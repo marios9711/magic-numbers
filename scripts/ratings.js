@@ -14,13 +14,13 @@ const fact = [1]; for (let i = 1; i <= 10; i++) fact[i] = fact[i - 1] * i;
 const pois = (l, g) => Math.exp(-l) * l ** g / fact[g];
 
 function probs(lh, la) {
-  let H = 0, D = 0, A = 0, u2 = 0, tot = 0;
+  let H = 0, D = 0, A = 0, u1 = 0, u2 = 0, u3 = 0, tot = 0;
   for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) {
     const p = pois(lh, i) * pois(la, j); tot += p;
     if (i > j) H += p; else if (i === j) D += p; else A += p;
-    if (i + j <= 2) u2 += p;
+    if (i + j <= 1) u1 += p; if (i + j <= 2) u2 += p; if (i + j <= 3) u3 += p;
   }
-  return { H: H / tot, D: D / tot, A: A / tot, over: 1 - u2 / tot };
+  return { H: H / tot, D: D / tot, A: A / tot, over: 1 - u2 / tot, o15: 1 - u1 / tot, o35: 1 - u3 / tot };
 }
 
 // Walk fixtures in kick-off order, predicting each before its result is added.

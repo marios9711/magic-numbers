@@ -17,6 +17,12 @@ const RULES = {
   minEdge: 1.05,     // chance x odds
   maxMargin: 0.08,   // bookmaker margin on Over/Under 2.5
 };
+// Other goal lines: ratings Poisson chance, recalibrated with the league average (fitted 2022–23;
+// on 2024 the predicted and actual rates match within about 1 point at every level).
+const LINE_W = { 'O1.5': { r: 0.6548, lg: 0.2469, b: -0.2757 }, 'O3.5': { r: 0.6531, lg: 0.2183, b: -0.9139 } };
+// Value on any goal line (Over/Under 1.5, Under 2.5, Over/Under 3.5). Stricter value bar than
+// Over 2.5 because the best of five lines is chosen, which flatters the winner.
+const ALT = { minOdds: 1.80, maxOdds: 3.00, minEdge: 1.08, maxMargin: 0.08 };
 const CUP = /cup|copa|coupe|pokal|coppa|ta[cç]a|beker|trophy|shield|super ?cup|friendl/i;
 const DEAD = new Set(['PST', 'CANC', 'ABD', 'AWD', 'WO']);
 
@@ -56,8 +62,13 @@ function goalsModel(rows, R, { seed = true } = {}) {
       const f = { hFor: avg(H, 0), hAg: avg(H, 1), aFor: avg(A, 0), aAg: avg(A, 1), lg: lg.reduce((s, g) => s + g, 0) / lg.length };
       const pr = Math.min(0.999, Math.max(0.001, rt.over));
       const z = W.b + W.r * Math.log(pr / (1 - pr)) + W.lg * f.lg + W.hFor * f.hFor + W.hAg * f.hAg + W.aFor * f.aFor + W.aAg * f.aAg;
+      const p = 1 / (1 + Math.exp(-z)), lp = {};
+      for (const [k, w] of Object.entries(LINE_W)) {
+        const q = Math.min(0.999, Math.max(0.001, k === 'O1.5' ? rt.o15 : rt.o35));
+        lp[k] = 1 / (1 + Math.exp(-(w.b + w.r * Math.log(q / (1 - q)) + w.lg * f.lg)));
+      }
       out.set(r.id, {
-        p: 1 / (1 + Math.exp(-z)),
+        p, lines: { 'O1.5': lp['O1.5'], 'U1.5': 1 - lp['O1.5'], 'O2.5': p, 'U2.5': 1 - p, 'O3.5': lp['O3.5'], 'U3.5': 1 - lp['O3.5'] },
         xg: (f.hFor + f.hAg + f.aFor + f.aAg) / 2,
         ov: [...H, ...A].filter(g => g[0] + g[1] > 2).length,
         lg: f.lg, cup: CUP.test(r.ln || ''),
@@ -87,7 +98,16 @@ function judge(g, od) {
     [!g.cup, g.cup ? 'cup match (rotation risk)' : 'league match'],
   ];
   const fp = fairProb(od, 'O2.5');
+  // Best-value other goal line (Over 2.5 has its own stricter rule above).
+  let alt = null;
+  if (od && !g.cup) for (const k of ['O1.5', 'U1.5', 'U2.5', 'O3.5', 'U3.5']) {
+    const ok = od[k], q = g.lines[k], f = fairProb(od, k), opp = od[(k[0] === 'O' ? 'U' : 'O') + k.slice(1)];
+    if (!ok || ok < ALT.minOdds || ok > ALT.maxOdds || !opp || 1 / ok + 1 / opp - 1 > ALT.maxMargin) continue;
+    const v = q * ok;
+    if (v >= ALT.minEdge && (!alt || v > alt.v)) alt = { k, p: Math.round(q * 1000) / 1000, o: ok, v: Math.round(v * 1000) / 1000, fair: f != null ? Math.round(f * 1000) / 1000 : null };
+  }
   return {
+    lines: Object.fromEntries(Object.entries(g.lines).map(([k, v]) => [k, Math.round(v * 1000) / 1000])), alt,
     fair: fp != null ? Math.round(fp * 1000) / 1000 : null,
     p: Math.round(g.p * 1000) / 1000, xg: Math.round(g.xg * 100) / 100, ov: g.ov, lg: Math.round(g.lg * 100) / 100,
     o: o || null, strong: checks.every(c => c[0]), edge: o ? Math.round((g.p * o - 1) * 1000) / 1000 : null,
@@ -103,4 +123,4 @@ function fairProb(m, key) {
   return (1 / m[key]) / g.reduce((s, k) => s + 1 / m[k], 0);
 }
 
-module.exports = { goalsModel, judge, RULES, fairProb };
+module.exports = { goalsModel, judge, RULES, ALT, fairProb };

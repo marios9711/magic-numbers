@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ROOT, readJSON, writeJSON, evaluate, stats, slim } = require('./lib');
-const { goalsModel, judge, RULES, fairProb } = require('./goals');
+const { goalsModel, judge, RULES, ALT, fairProb } = require('./goals');
 const { ratingsModel } = require('./ratings');
 
 const dir = path.join(ROOT, 'data/days');
@@ -16,9 +16,11 @@ const G = goalsModel([...byId.values()], R);
 const now = Date.now() / 1000;
 
 const odds = readJSON(path.join(ROOT, 'data/odds.json'), {});
+const bestOdds = readJSON(path.join(ROOT, 'data/best.json'), {});
 const withOdds = x => {
   const o = odds[x.id]; if (o && o.m && Object.keys(o.m).length) { x.od = o.m; x.bm = o.bm; if (o.open && o.open.at < o.at) x.op = o.open.m; }
   const g = judge(G.get(x.id), x.od); if (g) x.g = g;
+  const bo = bestOdds[x.id]; if (bo && bo.b) { x.best = bo.b; x.nb = bo.n; }
   const r = R.get(x.id);
   if (r) { const p = { '1': r.H, X: r.D, '2': r.A }, r3 = v => Math.round(v * 1000) / 1000;
     x.r = { '1': r3(r.H), X: r3(r.D), '2': r3(r.A), pick: Object.keys(p).sort((a, b) => p[b] - p[a])[0], lh: Math.round(r.lh * 100) / 100, la: Math.round(r.la * 100) / 100 }; }
@@ -35,9 +37,17 @@ const settledAll = results.filter(x => x.outcome && (x.pred || G.get(x.row.id) |
 // ranked by that value. One selection per match.
 const BOOK = { minOdds: 1.80, maxOdds: 4.0, maxMargin: 0.08, minEdge: 1.05 };
 const pct0 = v => `${Math.round(v * 100)}%`;
-function top3(xs) {
-  const over = xs.filter(x => x.g && x.g.strong).sort((a, b) => b.g.edge - a.g.edge)
-    .map(x => ({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, p: x.g.p, why: x.g.pass }));
+const LINE = { O: 'Over', U: 'Under' };
+function goalsPick(x) {
+  // Strong Over 2.5 (its own rule) or the best-value other goal line, whichever is better value.
+  const c = [];
+  if (x.g && x.g.strong) c.push({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, p: x.g.p, v: x.g.p * x.g.o, why: x.g.pass });
+  if (x.g && x.g.alt) { const a = x.g.alt; c.push({ x, m: a.k, kind: `${LINE[a.k[0]]} ${a.k.slice(1)} goals`, odd: a.o, p: a.p, v: a.v,
+    why: [`our chance ${pct0(a.p)}${a.fair != null ? ` vs bookmaker ${pct0(a.fair)}` : ''}`, `value ${a.v.toFixed(2)} (need ${ALT.minEdge}+)`, `odds ${a.o.toFixed(2)}`, 'league match'] }); }
+  return c.sort((a, b) => b.v - a.v)[0] || null;
+}
+function top3(xs, n = 3) {
+  const over = xs.map(goalsPick).filter(Boolean).sort((a, b) => b.v - a.v);
   const book = xs.filter(x => {
     if (!(x.p && x.r && x.od && (x.p.conf === 'high' || x.p.conf === 'medium'))) return false;
     const odd = x.od[x.p.pick], mg = x.od['1'] && x.od.X && x.od['2'] ? 1 / x.od['1'] + 1 / x.od.X + 1 / x.od['2'] - 1 : 1;
@@ -47,13 +57,15 @@ function top3(xs) {
       return { x, m: x.p.pick, kind: 'Book’s pick', odd, p: rp,
         why: [`ratings chance ${pct0(rp)}${fp != null ? ` vs bookmaker ${pct0(fp)}` : ''}`, `value ${(rp * odd).toFixed(2)}`, `${x.p.conf} confidence`, ...x.p.why.slice(0, 2)] }; });
   const seen = new Set(), out = [];
-  for (const c of [...over, ...book]) { if (out.length === 3) break; if (seen.has(c.x.id)) continue; seen.add(c.x.id); out.push(c); }
+  for (const c of [...over, ...book]) { if (out.length === n) break; if (seen.has(c.x.id)) continue; seen.add(c.x.id); out.push(c); }
   return out;
 }
 const dayKey = ts => new Date(ts * 1000).toISOString().slice(0, 10);
 const byDay = xs => { const m = new Map(); for (const x of xs) { const k = dayKey(x.ts); if (!m.has(k)) m.set(k, []); m.get(k).push(x); } return m; };
 const goalHit = x => x.hg + x.ag > 2;
-const hitTop = (c, x) => c.m === 'O2.5' ? goalHit(x) : ({ '1': x.o === 'H', X: x.o === 'D', '2': x.o === 'A' })[c.m];
+const lineHit = (m, x) => m[0] === 'O' ? x.hg + x.ag > Number(m.slice(1)) : x.hg + x.ag < Number(m.slice(1));
+const hitTop = (c, x) => /^[OU]\d/.test(c.m) ? lineHit(c.m, x) : ({ '1': x.o === 'H', X: x.o === 'D', '2': x.o === 'A' })[c.m];
+const bestOf = (x, m) => (x.best && x.best[m] && x.best[m][0] > ((x.od && x.od[m]) || 0)) ? x.best[m] : null;
 const settled = settledAll.filter(x => x.p).slice().reverse().slice(0, 1000);
 
 // Paper betting: a pretend €10 stake on each market, at the odds recorded before kick-off.
@@ -69,13 +81,14 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'top3']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
+for (const x of settledAll) if (x.g && x.g.alt) addBet('alt', x.g.alt.o, lineHit(x.g.alt.k, x));
 const top3Hist = [];
 for (const [d, xs] of byDay(settledAll)) {
   const picks = top3(xs);
-  for (const c of picks) addBet('top3', c.odd, hitTop(c, c.x));
+  for (const c of picks) { addBet('top3', c.odd, hitTop(c, c.x)); const bp = bestOf(c.x, c.m); addBet('top3best', bp ? bp[0] : c.odd, hitTop(c, c.x)); }
   if (picks.length) top3Hist.push({ d, picks: picks.map(c => ({ hn: c.x.hn, an: c.x.an, m: c.m, odd: c.odd, ok: hitTop(c, c.x), sc: `${c.x.hg}–${c.x.ag}` })) });
 }
 paper.top3Recent = top3Hist.slice(-14).reverse();
@@ -95,6 +108,7 @@ for (const x of settledAll) {
   if (x.p && x.r) addClv('ratings', x, x.r.pick);
   if (x.p) { addClv('pick', x, x.p.pick); addClv('home', x, '1'); const fav = MK.favourite(x); if (fav) addClv('favourite', x, fav); }
   if (x.g && x.g.strong) addClv('over25', x, 'O2.5');
+  if (x.g && x.g.alt) addClv('alt', x, x.g.alt.k);
 }
 for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addClv('top3', c.x, c.m);
 for (const k in clv) { const a = clv[k]; clv[k] = { n: a.n, avg: Math.round(1000 * a.sum / a.n) / 10, pos: Math.round(1000 * a.pos / a.n) / 10 }; }
@@ -109,6 +123,7 @@ for (const x of settledAll) {
   if (x.p && x.r) addVm('ratings', x, x.r.pick, hitM(x.r.pick, x.o));
   if (x.p) { addVm('pick', x, x.p.pick, hitM(x.p.pick, x.o)); addVm('home', x, '1', x.o === 'H'); const fav = MK.favourite(x); if (fav) addVm('favourite', x, fav, hitM(fav, x.o)); }
   if (x.g && x.g.strong) addVm('over25', x, 'O2.5', goalHit(x));
+  if (x.g && x.g.alt) addVm('alt', x, x.g.alt.k, lineHit(x.g.alt.k, x));
 }
 for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addVm('top3', c.x, c.m, hitTop(c, c.x));
 for (const k in vm) { const a = vm[k]; vm[k] = { n: a.n, hit: Math.round(1000 * a.hit / a.n) / 10, exp: Math.round(1000 * a.exp / a.n) / 10 }; }
@@ -197,6 +212,12 @@ writeJSON(path.join(out, 'top3.json'), {
   rules: { over: RULES, book: BOOK },
   days: [0, 1].map(o => dayKey(now + o * 864e2)).map(d => ({ d, picks: top3(T3.get(d) || []).map(c => ({
     ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
+    best: bestOf(c.x, c.m), nb: c.x.nb || null,
   })) })),
 });
+// Shortlist for line shopping (scripts/shop.js): the top 6 candidates of today and tomorrow
+// that have not kicked off, at most 10 matches.
+const shop = [];
+for (const o of [0, 1]) for (const c of top3((T3.get(dayKey(now + o * 864e2)) || []).filter(x => x.ts > now + 600), 6)) if (shop.length < 10) shop.push(c.x.id);
+writeJSON(path.join(ROOT, 'data/shop.json'), { at: new Date().toISOString(), ids: shop });
 console.log(`days=${files.length} fixtures=${byId.size} teamsReady=${ready}/${hist.size} upcoming=${upcoming.length} (predicted ${S.meta.upcomingPredicted}) graded=${S.graded}`);
