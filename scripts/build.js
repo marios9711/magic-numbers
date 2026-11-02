@@ -38,11 +38,14 @@ const settledAll = results.filter(x => x.outcome && (x.pred || G.get(x.row.id) |
 const BOOK = { minOdds: 1.80, maxOdds: 4.0, maxMargin: 0.08, minEdge: 1.05 };
 const pct0 = v => `${Math.round(v * 100)}%`;
 const LINE = { O: 'Over', U: 'Under' };
+// Top 3 goal selections: strong Over 2.5 only. The other value lines are still shown and
+// tracked on paper ('alt'), but were taken out of the Top 3 on 2 Nov 2026 after the historical
+// odds test: Under 2.5 value picks lost 13–16% at real Bet365 prices; 1.5/3.5 lines are untested.
+const TOP3_ALT = false;
 function goalsPick(x) {
-  // Strong Over 2.5 (its own rule) or the best-value other goal line, whichever is better value.
   const c = [];
   if (x.g && x.g.strong) c.push({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, p: x.g.p, v: x.g.p * x.g.o, why: x.g.pass });
-  if (x.g && x.g.alt) { const a = x.g.alt; c.push({ x, m: a.k, kind: `${LINE[a.k[0]]} ${a.k.slice(1)} goals`, odd: a.o, p: a.p, v: a.v,
+  if (TOP3_ALT && x.g && x.g.alt) { const a = x.g.alt; c.push({ x, m: a.k, kind: `${LINE[a.k[0]]} ${a.k.slice(1)} goals`, odd: a.o, p: a.p, v: a.v,
     why: [`our chance ${pct0(a.p)}${a.fair != null ? ` vs bookmaker ${pct0(a.fair)}` : ''}`, `value ${a.v.toFixed(2)} (need ${ALT.minEdge}+)`, `odds ${a.o.toFixed(2)}`, 'league match'] }); }
   return c.sort((a, b) => b.v - a.v)[0] || null;
 }
