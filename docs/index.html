@@ -101,6 +101,8 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
       <p>Up to three selections per day, never more than one per match. Strong <b>Over 2.5 goals</b> selections come first (best value first; other goal lines are not used); any places left go to the <b>book’s 1 / X / 2 pick</b> with high or medium confidence, odds between 1.80 and 4.00, a bookmaker margin of 8% or less, and value according to the ratings model (its chance for that result × odds ≥ 1.05), best value first. If nothing qualifies, the list stays short or empty. Every Top 3 selection is tracked under Paper betting.</p>
       <h3>Value goal lines (not from the book)</h3>
       <p>The ratings model gives the chance of every scoreline, so it can price every goal line: Over/Under 1.5, 2.5 and 3.5. For each match the site checks Over/Under 1.5, Under 2.5 and Over/Under 3.5 and keeps the one with the best value, if it passes: odds <b>1.80–3.00</b>, our chance × odds <b>1.08 or more</b> (stricter than Over 2.5 because picking the best of five lines flatters the winner), bookmaker margin 8% or less, and not a cup match. On the 2024 test season the chances for every line matched the actual rates to within about 1 point. <b>These lines are not used in the Top 3</b>: tested against real historical Bet365 prices, Under 2.5 value picks lost 13–16%, and the 1.5 / 3.5 lines could not be tested. They stay on the site and are tracked under Paper betting, so they can come back if live results prove them.</p>
+      <h3>Backup site and “price beats the market average”</h3>
+      <p>A second copy of this site (link at the top) runs on free files from football-data.co.uk: this season’s results and upcoming fixtures with Bet365, best and average odds for about 38 leagues. It needs no API key, so it keeps daily selections going if API-Football is unavailable. Team form there uses league matches only, and odds are updated a few times a week, so always check the current price before betting. It also lists matches where the <b>best price on the market</b> is at least 4% above the market-average chance (margin removed): in the 2022–24 test this returned +10.5% over 302 bets, which is promising but not proven, so it is tracked on paper as an experiment.</p>
       <h3>Best price (line shopping)</h3>
       <p>Every Top 3 candidate (up to 10 matches a run) is priced across all bookmakers the data source covers, and the best price is shown next to Bet365’s. Selections are still decided on Bet365 prices; Paper betting also tracks the Top 3 at the best available price, to show what shopping around is worth.</p>
       <h3>Over 2.5 goals (not from the book)</h3>
@@ -218,12 +220,17 @@ function renderUpcoming() {
 function renderTop3() {
   const T = DATA.top3; if (!T) { $('#top3').innerHTML = ''; return; }
   const say = (c) => /^[OU]\d/.test(c.m) ? `${c.m[0] === 'O' ? 'Over' : 'Under'} ${c.m.slice(1)} goals` : { '1': `${c.hn} to win`, X: 'Draw', '2': `${c.an} to win` }[c.m];
-  $('#top3').innerHTML = T.days.map((d, i) => `<div class="card top3"><h3>${i ? 'Tomorrow' : 'Today'}’s Top 3 <span class="note">${d.d}</span></h3>
+  const dname = (d, i) => i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : new Date(d + 'T12:00:00Z').toLocaleDateString([], { weekday: 'long' });
+  const sharp = d => d.sharp && d.sharp.length ? `<div class="lg" style="margin-top:10px">Price beats the market average (experimental)</div>${d.sharp.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
+      <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
+      <div class="badges"><span class="b ok">${esc(say(c))} @${c.odd.toFixed(2)} best</span>${c.b365 ? `<span class="b">Bet365 ${c.b365.toFixed(2)}</span>` : ''}<span class="b">market chance ${Math.round(c.fair * 100)}% · value ${c.v.toFixed(2)}</span></div></div>`).join('')}` : '';
+  const days = T.days.filter((d, i) => i < 2 || d.picks.length || (d.sharp && d.sharp.length));
+  $('#top3').innerHTML = days.map((d, i) => `<div class="card top3"><h3>${dname(d.d, T.days.indexOf(d))}’s Top 3 <span class="note">${d.d}</span></h3>
     ${d.picks.length ? d.picks.map(c => `<div class="pk"><div class="t">${time(c.ts)}</div>
       <div class="teams"><b>${esc(c.hn)}</b> v <b>${esc(c.an)}</b><div class="t">${esc(c.lg)}</div></div>
       <div class="badges"><span class="b pick">${esc(say(c))} @${c.odd.toFixed(2)}</span>${c.best ? `<span class="b ok" title="Best price across ${c.nb || 'all'} bookmakers">best ${c.best[0].toFixed(2)} · ${esc(c.best[1])}</span>` : ''}<span class="b">${esc(c.kind)}${c.p ? ' · ' + Math.round(c.p * 100) + '%' : ''}</span>${c.started ? '<span class="b">started</span>' : ''}</div>
       <div class="why">${c.why.map(esc).join(' · ')}</div></div>`).join('')
-    : `<div class="note">No strong selections${i ? ' yet — odds for tomorrow arrive with each run.' : ' today.'} A pick needs odds of 1.80 or more and must pass every check (see Method).</div>`}</div>`).join('');
+    : `<div class="note">No strong selections${i ? ' yet — odds arrive with each update.' : ' today.'} A pick needs odds of 1.80 or more and must pass every check (see Method).</div>`}${sharp(d)}</div>`).join('');
 }
 function renderResults() {
   const q = $('#q2').value.toLowerCase();
@@ -263,7 +270,7 @@ function renderStats(S, el, live) {
     table('By rule (when the rule fired, did its favoured result happen?)', S.byRule, [['Rule', k => `<td>${RULE[k] || k}</td>`], ['Times', (k, v) => `<td class="n">${v.n}</td>`], ['Correct', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['', (k, v) => barCell(v.hit, v.n)]]) +
     table('By league (10+ matches)', S.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Matches', (k, v) => `<td class="n">${v.n}</td>`], ['Pick', (k, v) => `<td class="n">${pct(v.hit, v.n)}</td>`], ['Underdog', (k, v) => `<td class="n">${pct(v.udHit, v.ud)}</td>`], ['DC', (k, v) => `<td class="n">${pct(v.dc, v.n)}</td>`]], 10);
 }
-const PM = { top3: ['Daily Top 3', 'method'], top3best: ['Daily Top 3 at the best price', 'method'], over25: ['Strong Over 2.5 goals', 'method'], alt: ['Value goal lines (Over/Under 1.5, 3.5, Under 2.5)', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], ratings: ['Ratings pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
+const PM = { top3: ['Daily Top 3', 'method'], top3best: ['Daily Top 3 at the best price', 'method'], over25: ['Strong Over 2.5 goals', 'method'], alt: ['Value goal lines (Over/Under 1.5, 3.5, Under 2.5)', 'method'], pick: ['Book’s pick (1 / X / 2)', 'method'], sharp: ['Price beats the market average (experimental)', 'method'], ratings: ['Ratings pick (1 / X / 2)', 'method'], underdog: ['Underdog not to lose', 'method'], dc: ['Double chance', 'method'], home: ['Always home win', 'baseline'], favourite: ['Always the bookmaker’s favourite', 'baseline'] };
 const eur = n => (n < 0 ? '−€' : '+€') + Math.abs(n).toFixed(2);
 function renderPaper(S, el) {
   const P = S && S.paper;
@@ -305,7 +312,8 @@ function sized(S) {
 }
 // Skill or luck? Return per bet = profit / stake. 95% range = average ± 2 standard errors.
 function verdict(a, stake) {
-  if (!a || a.bets < 2 || a.sq == null) return '';
+  if (!a || a.bets < 1 || a.sq == null) return '';
+  if (a.bets < 30) return `<div class="c"><b style="color:var(--mute)">too few bets to judge yet (${a.bets} of at least 30)</b></div>`;
   const n = a.bets, m = a.profit / stake / n, sd = Math.sqrt(Math.max(0, a.sq / n - m * m)), se = sd / Math.sqrt(n);
   const lo = (m - 2 * se) * 100, hi = (m + 2 * se) * 100, f = v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`;
   let say, col;
@@ -370,7 +378,10 @@ drawCalc();
   ['h', 'a'].forEach(s => $('#n' + s).addEventListener('change', () => pickTeam(s)));
   ['h', 'a'].forEach(s => $('#n' + s).addEventListener('input', drawCalc));
   const m = DATA.stats && DATA.stats.meta;
-  $('#meta').textContent = m ? `Updated ${new Date(m.updated).toLocaleString()} · ${m.upcomingPredicted} of ${m.upcomingTotal} upcoming fixtures predicted` : 'Waiting for the first daily update.';
+  const FDSITE = location.pathname.includes('/fd/');
+  $('#meta').innerHTML = (m ? `Updated ${new Date(m.updated).toLocaleString()} · ${m.upcomingPredicted} of ${m.upcomingTotal} upcoming fixtures predicted` : 'Waiting for the first daily update.') +
+    (FDSITE ? ` · <b>Backup source: football-data.co.uk</b> (about 38 leagues, league matches only, odds updated a few times a week) · <a href="../">main site</a>`
+      : ` · <a href="fd/">backup site (football-data.co.uk)</a>`);
   renderTop3(); renderUpcoming(); renderResults();
   renderStats(DATA.stats, $('#perfBody'), true);
   renderStats(DATA.backtest, $('#btBody'), false);
