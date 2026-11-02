@@ -1,13 +1,17 @@
 // Builds the website data from all collected days.
+// SOURCE=fd builds the backup site (docs/fd/) from football-data.co.uk files instead of API-Football.
 const fs = require('fs');
 const path = require('path');
 const { ROOT, readJSON, writeJSON, evaluate, stats, slim } = require('./lib');
 const { goalsModel, judge, RULES, ALT, fairProb } = require('./goals');
 const { ratingsModel } = require('./ratings');
 
+const FD = process.env.SOURCE === 'fd';
+const FDATA = FD ? require('./fdsource').load() : null;
 const dir = path.join(ROOT, 'data/days');
-const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort() : [];
+const files = FD ? [] : fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort() : [];
 const byId = new Map();
+if (FD) for (const r of FDATA.rows) byId.set(r.id, r);
 for (const f of files) for (const r of readJSON(path.join(dir, f), { rows: [] }).rows) byId.set(r.id, r); // newer files win
 
 const { results, hist } = evaluate([...byId.values()]);
@@ -15,10 +19,15 @@ const R = ratingsModel([...byId.values()]);
 const G = goalsModel([...byId.values()], R);
 const now = Date.now() / 1000;
 
-const odds = readJSON(path.join(ROOT, 'data/odds.json'), {});
-const bestOdds = readJSON(path.join(ROOT, 'data/best.json'), {});
+const odds = FD ? {} : readJSON(path.join(ROOT, 'data/odds.json'), {});
+const bestOdds = FD ? {} : readJSON(path.join(ROOT, 'data/best.json'), {});
 const withOdds = x => {
   const o = odds[x.id]; if (o && o.m && Object.keys(o.m).length) { x.od = o.m; x.bm = o.bm; if (o.open && o.open.at < o.at) x.op = o.open.m; }
+  const f = FD && FDATA.odds[x.id];
+  if (f) {
+    x.od = f.m; x.bm = 'Bet365'; if (f.open) x.op = f.open; if (f.avg) x.avg = f.avg;
+    if (f.best) { x.best = Object.fromEntries(Object.entries(f.best).map(([k, v]) => [k, [v, 'best on the market']])); }
+  }
   const g = judge(G.get(x.id), x.od); if (g) x.g = g;
   const bo = bestOdds[x.id]; if (bo && bo.b) { x.best = bo.b; x.nb = bo.n; }
   const r = R.get(x.id);
@@ -27,7 +36,7 @@ const withOdds = x => {
   return x;
 };
 const upcoming = results
-  .filter(x => !x.outcome && x.row.ts > now - 3 * 3600 && x.row.ts < now + 2 * 864e2)
+  .filter(x => !x.outcome && x.row.ts > now - 3 * 3600 && x.row.ts < now + (FD ? 7 : 2) * 864e2)
   .map(slim).map(withOdds);
 const settledAll = results.filter(x => x.outcome && (x.pred || G.get(x.row.id) || R.get(x.row.id))).map(slim).map(withOdds);
 
@@ -68,6 +77,18 @@ const byDay = xs => { const m = new Map(); for (const x of xs) { const k = dayKe
 const goalHit = x => x.hg + x.ag > 2;
 const lineHit = (m, x) => m[0] === 'O' ? x.hg + x.ag > Number(m.slice(1)) : x.hg + x.ag < Number(m.slice(1));
 const hitTop = (c, x) => /^[OU]\d/.test(c.m) ? lineHit(c.m, x) : ({ '1': x.o === 'H', X: x.o === 'D', '2': x.o === 'A' })[c.m];
+// Price beats the market: best price x the market-average chance (margin removed) >= 1.04.
+// Historical test (best vs average, 2022–24): +10.5% over 302 bets — promising, not proven.
+const SHARP = { minEdge: 1.04, maxOdds: 5 };
+function sharpPicks(x) {
+  if (!x.best || !x.avg) return [];
+  const out = [];
+  for (const k of ['1', 'X', '2', 'O2.5', 'U2.5']) {
+    const b = x.best[k] && x.best[k][0], fp = fairProb(x.avg, k);
+    if (b && fp != null && b <= SHARP.maxOdds && b * fp >= SHARP.minEdge) out.push({ x, m: k, odd: b, fair: fp, v: b * fp });
+  }
+  return out;
+}
 const bestOf = (x, m) => (x.best && x.best[m] && x.best[m][0] > ((x.od && x.od[m]) || 0)) ? x.best[m] : null;
 const settled = settledAll.filter(x => x.p).slice().reverse().slice(0, 1000);
 
@@ -84,9 +105,10 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
+for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd, hitTop(c, x));
 for (const x of settledAll) if (x.g && x.g.alt) addBet('alt', x.g.alt.o, lineHit(x.g.alt.k, x));
 const top3Hist = [];
 for (const [d, xs] of byDay(settledAll)) {
@@ -179,9 +201,10 @@ const ready = [...hist.values()].filter(h => h.length >= 7).length;
 const S = stats(results);
 S.meta = {
   updated: new Date().toISOString(),
-  daysCollected: files.length,
-  firstDay: files[0] ? files[0].slice(0, 10) : null,
-  lastDay: files.length ? files[files.length - 1].slice(0, 10) : null,
+  source: FD ? 'football-data.co.uk' : 'API-Football',
+  daysCollected: FD ? new Set([...byId.values()].filter(r => r.st === 'FT').map(r => new Date(r.ts * 1000).toISOString().slice(0, 10))).size : files.length,
+  firstDay: FD ? new Date(Math.min(...[...byId.values()].map(r => r.ts)) * 1000).toISOString().slice(0, 10) : files[0] ? files[0].slice(0, 10) : null,
+  lastDay: FD ? new Date(Math.max(...[...byId.values()].filter(r => r.st === 'FT').map(r => r.ts)) * 1000).toISOString().slice(0, 10) : files.length ? files[files.length - 1].slice(0, 10) : null,
   fixtures: byId.size,
   teams: hist.size,
   teamsReady: ready,
@@ -202,7 +225,7 @@ const teams = [...hist.entries()].filter(([, h]) => h.length).map(([id, h]) => {
   return { n: t.n, l: t.l, r: last.map(m => m.r).join(''), h: last.map(m => (m.home ? 1 : 0)).join('') };
 }).sort((a, b) => a.n.localeCompare(b.n));
 
-const out = path.join(ROOT, 'docs/data');
+const out = path.join(ROOT, FD ? 'docs/fd/data' : 'docs/data');
 writeJSON(path.join(out, 'teams.json'), teams);
 writeJSON(path.join(out, 'upcoming.json'), upcoming);
 writeJSON(path.join(out, 'settled.json'), settled);
@@ -213,7 +236,11 @@ const allDay = results.filter(x => dayKey(x.row.ts) >= dayKey(now)).map(slim).ma
 const T3 = byDay(allDay);
 writeJSON(path.join(out, 'top3.json'), {
   rules: { over: RULES, book: BOOK },
-  days: [0, 1].map(o => dayKey(now + o * 864e2)).map(d => ({ d, picks: top3(T3.get(d) || []).map(c => ({
+  source: FD ? { name: 'football-data.co.uk', status: FDATA.status } : { name: 'API-Football' },
+  days: (FD ? [0, 1, 2, 3] : [0, 1]).map(o => dayKey(now + o * 864e2)).map(d => ({ d,
+    sharp: (T3.get(d) || []).filter(x => x.ts > now).flatMap(sharpPicks).sort((a, b) => b.v - a.v).slice(0, 5)
+      .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
+    picks: top3(T3.get(d) || []).map(c => ({
     ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
     best: bestOf(c.x, c.m), nb: c.x.nb || null,
   })) })),
@@ -222,5 +249,5 @@ writeJSON(path.join(out, 'top3.json'), {
 // that have not kicked off, at most 10 matches.
 const shop = [];
 for (const o of [0, 1]) for (const c of top3((T3.get(dayKey(now + o * 864e2)) || []).filter(x => x.ts > now + 600), 6)) if (shop.length < 10) shop.push(c.x.id);
-writeJSON(path.join(ROOT, 'data/shop.json'), { at: new Date().toISOString(), ids: shop });
+if (!FD) writeJSON(path.join(ROOT, 'data/shop.json'), { at: new Date().toISOString(), ids: shop });
 console.log(`days=${files.length} fixtures=${byId.size} teamsReady=${ready}/${hist.size} upcoming=${upcoming.length} (predicted ${S.meta.upcomingPredicted}) graded=${S.graded}`);
