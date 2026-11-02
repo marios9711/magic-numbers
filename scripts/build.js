@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ROOT, readJSON, writeJSON, evaluate, stats, slim } = require('./lib');
-const { goalsModel, judge, RULES } = require('./goals');
+const { goalsModel, judge, RULES, fairProb } = require('./goals');
 
 const dir = path.join(ROOT, 'data/days');
 const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort() : [];
@@ -15,7 +15,7 @@ const now = Date.now() / 1000;
 
 const odds = readJSON(path.join(ROOT, 'data/odds.json'), {});
 const withOdds = x => {
-  const o = odds[x.id]; if (o && o.m && Object.keys(o.m).length) { x.od = o.m; x.bm = o.bm; }
+  const o = odds[x.id]; if (o && o.m && Object.keys(o.m).length) { x.od = o.m; x.bm = o.bm; if (o.open && o.open.at < o.at) x.op = o.open.m; }
   const g = judge(G.get(x.id), x.od); if (g) x.g = g;
   return x;
 };
@@ -70,6 +70,25 @@ for (const [d, xs] of byDay(settledAll)) {
   if (picks.length) top3Hist.push({ d, picks: picks.map(c => ({ hn: c.x.hn, an: c.x.an, m: c.m, odd: c.odd, ok: hitTop(c, c.x), sc: `${c.x.hg}–${c.x.ag}` })) });
 }
 paper.top3Recent = top3Hist.slice(-14).reverse();
+
+// Closing line value: did the first price we saw beat the bookmaker's later fair price?
+// value = open odds x latest margin-free probability - 1 (positive = we got a better price
+// than the market settled on). Only matches priced in two or more runs count.
+const clv = {};
+const addClv = (k, x, mk) => {
+  const o = x.op && x.op[mk], fp = fairProb(x.od, mk);
+  if (!o || fp == null) return;
+  const v = o * fp - 1, a = (clv[k] ||= { n: 0, sum: 0, pos: 0 });
+  a.n++; a.sum += v; if (v > 0) a.pos++;
+};
+for (const x of settledAll) {
+  if (!x.od) continue;
+  if (x.p) { addClv('pick', x, x.p.pick); addClv('home', x, '1'); const fav = MK.favourite(x); if (fav) addClv('favourite', x, fav); }
+  if (x.g && x.g.strong) addClv('over25', x, 'O2.5');
+}
+for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addClv('top3', c.x, c.m);
+for (const k in clv) { const a = clv[k]; clv[k] = { n: a.n, avg: Math.round(1000 * a.sum / a.n) / 10, pos: Math.round(1000 * a.pos / a.n) / 10 }; }
+paper.clv = clv;
 const cum = Object.fromEntries(Object.keys(MK).map(k => [k, 0]));
 const days = new Map();
 for (const x of settledAll.filter(x => x.od && x.p).sort((a, b) => a.ts - b.ts)) {

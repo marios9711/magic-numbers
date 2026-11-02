@@ -83,11 +83,21 @@ function judge(g, od) {
     [margin != null && margin <= R.maxMargin, margin != null ? `bookmaker margin ${(margin * 100).toFixed(1)}% (need ≤${R.maxMargin * 100}%)` : 'margin unknown'],
     [!g.cup, g.cup ? 'cup match (rotation risk)' : 'league match'],
   ];
+  const fp = fairProb(od, 'O2.5');
   return {
+    fair: fp != null ? Math.round(fp * 1000) / 1000 : null,
     p: Math.round(g.p * 1000) / 1000, xg: Math.round(g.xg * 100) / 100, ov: g.ov, lg: Math.round(g.lg * 100) / 100,
     o: o || null, strong: checks.every(c => c[0]), edge: o ? Math.round((g.p * o - 1) * 1000) / 1000 : null,
     fail: checks.filter(c => !c[0]).map(c => c[1]), pass: checks.filter(c => c[0]).map(c => c[1]),
   };
 }
 
-module.exports = { goalsModel, judge, RULES };
+// Bookmaker's own chance for a selection, with its margin removed (1X2 or Over/Under 2.5 group).
+const GROUPS = [['1', 'X', '2'], ['O2.5', 'U2.5'], ['O1.5', 'U1.5'], ['O3.5', 'U3.5']];
+function fairProb(m, key) {
+  const g = m && GROUPS.find(g => g.includes(key));
+  if (!g || !g.every(k => m[k] > 1)) return null;
+  return (1 / m[key]) / g.reduce((s, k) => s + 1 / m[k], 0);
+}
+
+module.exports = { goalsModel, judge, RULES, fairProb };

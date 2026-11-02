@@ -48,7 +48,13 @@ function markets(bm) {
           if (!(f.fixture && f.fixture.timestamp > now)) continue; // only before kick-off
           const bm = (f.bookmakers || []).find(b => b.id === BOOKMAKER);
           const m = bm && markets(bm);
-          if (m && Object.keys(m).length) { odds[f.fixture.id] = { at: Math.floor(now), bm: bm.name, m }; saved++; }
+          if (m && Object.keys(m).length) {
+            // Keep the first price we saw ("open") next to the latest pre-kick-off price,
+            // so we can measure whether picks beat the later (closer to closing) price.
+            const prev = odds[f.fixture.id];
+            const open = prev ? (prev.open || { at: prev.at, m: prev.m }) : { at: Math.floor(now), m };
+            odds[f.fixture.id] = { at: Math.floor(now), bm: bm.name, m, open }; saved++;
+          }
         }
       } catch (e) { console.error(`odds ${d} p${page}: ${e.message}`); break; }
       page++;
