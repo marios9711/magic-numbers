@@ -89,6 +89,45 @@ for (const x of settledAll) {
 for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addClv('top3', c.x, c.m);
 for (const k in clv) { const a = clv[k]; clv[k] = { n: a.n, avg: Math.round(1000 * a.sum / a.n) / 10, pos: Math.round(1000 * a.pos / a.n) / 10 }; }
 paper.clv = clv;
+
+// Against the bookmaker: how often each bet type won compared with how often the bookmaker's
+// own (margin-free) price said it should. Positive gap = we pick better than the market.
+const vm = {};
+const addVm = (k, x, mk, ok) => { const fp = fairProb(x.od, mk); if (fp == null) return; const a = (vm[k] ||= { n: 0, hit: 0, exp: 0 }); a.n++; if (ok) a.hit++; a.exp += fp; };
+for (const x of settledAll) {
+  if (!x.od) continue;
+  if (x.p) { addVm('pick', x, x.p.pick, hitM(x.p.pick, x.o)); addVm('home', x, '1', x.o === 'H'); const fav = MK.favourite(x); if (fav) addVm('favourite', x, fav, hitM(fav, x.o)); }
+  if (x.g && x.g.strong) addVm('over25', x, 'O2.5', goalHit(x));
+}
+for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addVm('top3', c.x, c.m, hitTop(c, c.x));
+for (const k in vm) { const a = vm[k]; vm[k] = { n: a.n, hit: Math.round(1000 * a.hit / a.n) / 10, exp: Math.round(1000 * a.exp / a.n) / 10 }; }
+// Accuracy scores (Brier: lower is better; 0 = perfect). Over 2.5: our model vs the bookmaker
+// vs a flat 50%. 1X2: the book's rule scores turned into shares vs the bookmaker's fair chances.
+const br = { over: { n: 0, model: 0, market: 0, flat: 0 }, book: { n: 0, model: 0, market: 0, flat: 0 } };
+for (const x of settledAll) {
+  if (x.g && x.g.fair != null) {
+    const y = goalHit(x) ? 1 : 0, a = br.over;
+    a.n++; a.model += (x.g.p - y) ** 2; a.market += (x.g.fair - y) ** 2; a.flat += (0.5 - y) ** 2;
+  }
+  const f = x.od && ['1', 'X', '2'].map(k => fairProb(x.od, k));
+  if (x.p && f && f.every(v => v != null)) {
+    const t = x.p.s.H + x.p.s.D + x.p.s.A; if (!t) continue;
+    const bk = [x.p.s.H / t, x.p.s.D / t, x.p.s.A / t], y = ['H', 'D', 'A'].map(o => (x.o === o ? 1 : 0)), a = br.book;
+    a.n++; for (let i = 0; i < 3; i++) { a.model += (bk[i] - y[i]) ** 2; a.market += (f[i] - y[i]) ** 2; a.flat += (1 / 3 - y[i]) ** 2; }
+  }
+}
+for (const k in br) { const a = br[k]; for (const m of ['model', 'market', 'flat']) a[m] = a.n ? Math.round(10000 * a[m] / a.n) / 10000 : null; }
+paper.vsMarket = vm; paper.brier = br;
+
+// Edge-sized stakes (quarter Kelly) for selections with our own chance (Over 2.5). Notional
+// €1,000 bank, not compounding, max 5% (€50) per bet. Book picks have no chance estimate,
+// so inside the sized Top 3 they keep the flat €10 stake.
+const BANK = 1000, kStake = (p, o) => Math.max(0, Math.min(0.05, 0.25 * (p * o - 1) / (o - 1))) * BANK;
+paper.sized = { bank: BANK, over25: { bets: 0, won: 0, staked: 0, profit: 0 }, top3: { bets: 0, won: 0, staked: 0, profit: 0 } };
+const addSized = (k, st, odd, ok) => { const a = paper.sized[k]; if (!(st > 0)) return; a.bets++; a.staked += st; if (ok) a.won++; a.profit += ok ? st * (odd - 1) : -st; };
+for (const x of settledAll) if (x.g && x.g.strong) addSized('over25', kStake(x.g.p, x.g.o), x.g.o, goalHit(x));
+for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addSized('top3', c.m === 'O2.5' ? kStake(c.x.g.p, c.odd) : STAKE, c.odd, hitTop(c, c.x));
+for (const k of ['over25', 'top3']) { const a = paper.sized[k]; a.staked = Math.round(a.staked * 100) / 100; a.profit = Math.round(a.profit * 100) / 100; }
 const cum = Object.fromEntries(Object.keys(MK).map(k => [k, 0]));
 const days = new Map();
 for (const x of settledAll.filter(x => x.od && x.p).sort((a, b) => a.ts - b.ts)) {
