@@ -132,6 +132,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
         <li><b>Back home</b> (p. 70): three straight losses, then a home game → bounce back.</li>
         <li><b>Golden sequence</b> (pp. 59–60): results that complete a 4-2-1 form over 7 get a small boost.</li>
       </ul>
+      <p class="note">Bookmaker chances on this site have the margin removed with the “power” method, which takes more of it from outsiders than from favourites; on historical Bet365 prices it matched real results better than an even split.</p>
       <p class="note">These rules are an interpretation of the book's text; the book does not give exact weights. Results are judged on the 90-minute score. Predictions are computed only from matches played before kick-off, so the record cannot see the future. This is a research tool, not betting advice.</p>
     </div>
   </section>
@@ -155,6 +156,13 @@ const time = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit',
 const dayLabel = ts => new Date(ts * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 const seq = s => `<span class="seq">${[...(s || '')].map(c => `<i class="${c}" title="${c}"></i>`).join('')}</span>`;
 
+// Bookmaker's margin-free chances (power method, same as the build scripts).
+function powerFair(odds) {
+  const q = odds.map(o => 1 / o), sum = k => q.reduce((s, v) => s + v ** k, 0);
+  let lo = 0.5, hi = 3;
+  for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (sum(mid) > 1) lo = mid; else hi = mid; }
+  return q.map(v => v ** ((lo + hi) / 2));
+}
 function matchRow(x, settled) {
   const p = x.p;
   let badges = '';
@@ -184,7 +192,7 @@ function matchRow(x, settled) {
   const score = settled ? `<span class="sc">${x.hg}–${x.ag}</span>` : ' v ';
   const ldet = x.g && x.g.lines ? `<div>Goal lines (our chance${x.od ? ' @ Bet365' : ''}${x.best ? ' / best price' : ''}): ${['O1.5', 'U1.5', 'O2.5', 'U2.5', 'O3.5', 'U3.5'].map(k => `${k} ${Math.round(x.g.lines[k] * 100)}%${x.od && x.od[k] ? ' @' + x.od[k].toFixed(2) : ''}${x.best && x.best[k] ? ' / ' + x.best[k][0].toFixed(2) : ''}`).join(' · ')}</div>` : '';
   const gdet = ldet + (x.g ? `<div>Over 2.5: ${x.g.strong ? '<b>strong selection</b>' : 'not strong'}${x.g.fair != null ? ` (our chance ${Math.round(x.g.p * 100)}% vs bookmaker ${Math.round(x.g.fair * 100)}%)` : ''} — ${[...x.g.pass.map(t => '✓ ' + esc(t)), ...x.g.fail.map(t => '✗ ' + esc(t))].join(' · ')}</div>` : '');
-  const rdet = x.r ? `<div>Ratings: 1 ${Math.round(x.r['1'] * 100)}% · X ${Math.round(x.r.X * 100)}% · 2 ${Math.round(x.r['2'] * 100)}% — expected goals ${x.r.lh.toFixed(2)}–${x.r.la.toFixed(2)}${x.od && x.od['1'] && x.od.X && x.od['2'] ? ` · bookmaker ${['1', 'X', '2'].map(k => Math.round(100 * (1 / x.od[k]) / (1 / x.od['1'] + 1 / x.od.X + 1 / x.od['2'])) + '%').join(' / ')}` : ''}</div>` : '';
+  const rdet = x.r ? `<div>Ratings: 1 ${Math.round(x.r['1'] * 100)}% · X ${Math.round(x.r.X * 100)}% · 2 ${Math.round(x.r['2'] * 100)}% — expected goals ${x.r.lh.toFixed(2)}–${x.r.la.toFixed(2)}${x.od && x.od['1'] && x.od.X && x.od['2'] ? ` · bookmaker ${powerFair([x.od['1'], x.od.X, x.od['2']]).map(v => Math.round(100 * v) + '%').join(' / ')}` : ''}</div>` : '';
   const det = !p && (x.g || x.r) ? `<div class="det">${rdet}${gdet}</div>` : p ? `<div class="det">${rdet}${gdet}${esc(x.hn)} ${seq(p.f.h.seq)} 6: ${p.f.h.f6} · 7: ${p.f.h.f7} &nbsp;|&nbsp; ${esc(x.an)} ${seq(p.f.a.seq)} 6: ${p.f.a.f6} · 7: ${p.f.a.f7}
     <div>Scores — 1: ${p.s.H} · X: ${p.s.D} · 2: ${p.s.A}</div><ul>${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '';
   return `<div class="m ${p && !settled ? 'conf-' + p.conf : ''}" onclick="this.classList.toggle('open')">
@@ -267,9 +275,9 @@ function renderPaper(S, el) {
     const a = P.markets[k] || { bets: 0, won: 0, profit: 0 }, roi = a.bets ? 100 * a.profit / (a.bets * P.stake) : 0;
     return `<div class="card kpi"><div class="l">${label}${kind === 'baseline' ? ' <span class="b">comparison</span>' : ''}</div>
       <div class="v" style="color:${a.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(a.profit)}</div>
-      <div class="c">${a.bets} bets · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div>${clvLine(P.clv && P.clv[k])}</div>`;
+      <div class="c">${a.bets} bets · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div>${verdict(a, P.stake)}${clvLine(P.clv && P.clv[k])}</div>`;
   }).join('');
-  el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets.</div>
+  el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets. Each card shows the likely range of the true long-run return: only when the whole range is above zero is it more than luck.</div>
     <div class="card note"><b>Beat later price</b> (closing line value): the first odds we recorded compared with the bookmaker's own chance at the last run before kick-off, with its margin removed. Consistently positive means our picks find prices before the market corrects them — the earliest sign of a real edge, visible long before profit is reliable. Always the favourite shows what “no edge” looks like.</div>
     <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}` +
     table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
@@ -294,6 +302,18 @@ function sized(S) {
     <div class="c">${a.bets} bets · €${a.staked.toFixed(0)} staked · ${pct(a.won, a.bets)} won · return ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</div></div>`; };
   return `<div class="card note">Edge-sized stakes: a quarter of the Kelly amount from a notional €${S.bank} bank (max €${S.bank * 0.05} a bet), so bigger edges get bigger stakes. Over 2.5 uses the goals model’s chance; the book’s picks use the ratings model’s chance for that result.</div>
     <div class="grid">${card('Strong Over 2.5 goals', S.over25)}${card('Daily Top 3', S.top3)}</div>`;
+}
+// Skill or luck? Return per bet = profit / stake. 95% range = average ± 2 standard errors.
+function verdict(a, stake) {
+  if (!a || a.bets < 2 || a.sq == null) return '';
+  const n = a.bets, m = a.profit / stake / n, sd = Math.sqrt(Math.max(0, a.sq / n - m * m)), se = sd / Math.sqrt(n);
+  const lo = (m - 2 * se) * 100, hi = (m + 2 * se) * 100, f = v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`;
+  let say, col;
+  if (lo > 0) { say = 'looks like a real edge'; col = 'var(--win)'; }
+  else if (hi < 0) { say = 'losing — not just bad luck'; col = 'var(--loss)'; }
+  else if (m > 0 && sd > 0) { const need = Math.ceil((2 * sd / m) ** 2); say = `not proven yet — about ${need.toLocaleString()} bets needed at this rate`; col = 'var(--mute)'; }
+  else { say = 'not proven either way yet'; col = 'var(--mute)'; }
+  return `<div class="c" title="The true long-run return is probably somewhere in this range (95%).">Likely range ${f(lo)} to ${f(hi)} · <b style="color:${col}">${say}</b></div>`;
 }
 function top3Hist(h) {
   if (!h || !h.length) return '';
