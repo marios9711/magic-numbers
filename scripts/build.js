@@ -98,6 +98,32 @@ function overScore(x) {
   const f = fairProb(x.od, 'O2.5'); return f == null ? null : (x.g.p + f) / 2;
 }
 const overTop = xs => xs.map(x => ({ x, s: overScore(x) })).filter(c => c.s != null).sort((a, b) => b.s - a.s).slice(0, 3);
+// Weekend slip (Saturday and Sunday): a 10–12 selection accumulator aiming at total odds 40–60.
+// Each match offers its likeliest selection: Over 2.5 (average of our goals model and the
+// bookmaker) or the favourite to win (average of the ratings model and the bookmaker), odds
+// 1.20–1.70. Selections are added from the likeliest down. High risk: all legs must win.
+const SLIP = { minLegs: 10, maxLegs: 12, minOdds: 40, maxOdds: 60, legMin: 1.20, legMax: 1.70 };
+const priceOf = (x, m) => { const b = bestOf(x, m); return b ? b[0] : x.od && x.od[m]; };
+function slipLegs(xs) {
+  const cand = [];
+  for (const x of xs) {
+    const opts = [];
+    const so = overScore(x); if (so != null) opts.push({ m: 'O2.5', p: so });
+    if (x.r && x.od) for (const k of ['1', '2']) { const f = fairProb(x.od, k); if (f != null) opts.push({ m: k, p: (x.r[k] + f) / 2 }); }
+    const ok = opts.map(o => ({ ...o, x, odd: priceOf(x, o.m) })).filter(o => o.odd >= SLIP.legMin && o.odd <= SLIP.legMax);
+    if (ok.length) cand.push(ok.sort((a, b) => b.p - a.p)[0]);
+  }
+  cand.sort((a, b) => b.p - a.p);
+  const legs = []; let tot = 1;
+  for (const c of cand) {
+    if (legs.length >= SLIP.maxLegs) break;
+    if (legs.length >= SLIP.minLegs && tot >= SLIP.minOdds) break;
+    if (legs.length >= SLIP.minLegs - 1 && tot * c.odd > SLIP.maxOdds && tot >= SLIP.minOdds / c.odd) continue;
+    legs.push(c); tot *= c.odd;
+  }
+  return legs.length >= SLIP.minLegs ? { legs, odds: tot, chance: legs.reduce((s, c) => s * c.p, 1) } : null;
+}
+const isWeekend = d => [0, 6].includes(new Date(d + 'T12:00:00Z').getUTCDay());
 const bestOf = (x, m) => (x.best && x.best[m] && x.best[m][0] > ((x.od && x.od[m]) || 0)) ? x.best[m] : null;
 const settled = settledAll.filter(x => x.p).slice().reverse().slice(0, 1000);
 
@@ -114,7 +140,7 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best', 'slip']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
 for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd, hitTop(c, x));
@@ -133,6 +159,17 @@ for (const [d, xs] of byDay(settledAll)) {
   if (picks.length) overHist.push({ d, picks: picks.map(c => ({ hn: c.x.hn, an: c.x.an, m: 'O2.5', odd: c.x.od['O2.5'], ok: goalHit(c.x), sc: `${c.x.hg}–${c.x.ag}` })) });
 }
 paper.overRecent = overHist.slice(-14).reverse();
+const slipHist = [];
+for (const [d, xs] of byDay(settledAll)) {
+  if (!isWeekend(d)) continue;
+  const s = slipLegs(xs); if (!s) continue;
+  const res = s.legs.map(c => hitTop(c, c.x)), won = res.every(Boolean);
+  addBet('slip', s.odds, won);
+  slipHist.push({ d, odds: Math.round(s.odds * 100) / 100, won, hit: res.filter(Boolean).length, n: res.length,
+    picks: s.legs.map((c, i) => ({ hn: c.x.hn, an: c.x.an, m: c.m, odd: c.odd, ok: res[i], sc: `${c.x.hg}–${c.x.ag}` })) });
+}
+paper.slipRecent = slipHist.slice(-8).reverse();
+paper.slipSummary = { slips: slipHist.length, won: slipHist.filter(s => s.won).length, avgHit: slipHist.length ? Math.round(10 * slipHist.reduce((a, s) => a + s.hit / s.n, 0) / slipHist.length * 100) / 10 : null };
 
 // Closing line value: did the first price we saw beat the bookmaker's later fair price?
 // value = open odds x latest margin-free probability - 1 (positive = we got a better price
@@ -258,6 +295,8 @@ writeJSON(path.join(out, 'top3.json'), {
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
     over: overTop((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600)).map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, p: Math.round(c.s * 1000) / 1000,
       ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now })),
+    slip: isWeekend(d) ? (s => s && { odds: Math.round(s.odds * 100) / 100, chance: Math.round(s.chance * 10000) / 10000,
+      legs: s.legs.map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, p: Math.round(c.p * 1000) / 1000, started: c.x.ts <= now })) })(slipLegs((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600))) : null,
     picks: top3(T3.get(d) || []).map(c => ({
     ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
     best: bestOf(c.x, c.m), nb: c.x.nb || null,
