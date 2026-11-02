@@ -42,7 +42,7 @@ const pick = (o, pre) => {
 function load() {
   const dir = path.join(ROOT, 'data/fdco');
   if (!fs.existsSync(dir)) return { rows: [], odds: {}, files: [] };
-  const rows = new Map(), odds = {};
+  const rows = new Map(), odds = {}, snaps = readJSON(path.join(dir, 'snapshots.json'), {});
   const add = (o, code, played) => {
     const L = LEAGUES[code]; if (!L) return;
     const hn = o.HomeTeam || o.Home, an = o.AwayTeam || o.Away; if (!hn || !an || !o.Date) return;
@@ -54,6 +54,8 @@ function load() {
       hg: done ? Number(hg) : null, ag: done ? Number(ag) : null });
     const open = pick(o, 'B365'), close = pick(o, 'B365C'), best = pick(o, 'Max'), avg = pick(o, 'Avg');
     if (open || close) odds[id] = { m: close || open, open: close && open ? open : null, best, avg };
+    const sn = snaps[`${code}|${o.Date}|${hn}|${an}`];
+    if (sn && odds[id] && sn.last.at > sn.first.at) odds[id].snap = sn; // two price snapshots before kick-off
   };
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
   for (const f of files.filter(f => f.startsWith('res-'))) { const code = f.slice(4, -5); for (const o of readJSON(path.join(dir, f), [])) add(o, code, true); }

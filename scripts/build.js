@@ -20,6 +20,20 @@ const R = ratingsModel([...byId.values()]);
 const G = goalsModel([...byId.values()], R);
 const now = Date.now() / 1000;
 
+// Team profile before each match: last 8 finished league matches — goals per game (both teams),
+// Over 2.5 count, goals conceded per game.
+const TP = new Map();
+{
+  const H = new Map(), get = t => { if (!H.has(t)) H.set(t, []); return H.get(t); };
+  const prof = t => { const h = get(t).slice(-8); if (h.length < 4) return null;
+    return { n: h.length, avg: Math.round(10 * h.reduce((s, g) => s + g[0] + g[1], 0) / h.length) / 10, ov: h.filter(g => g[0] + g[1] > 2).length,
+      ga: Math.round(10 * h.reduce((s, g) => s + g[1], 0) / h.length) / 10 }; };
+  for (const r of [...byId.values()].sort((a, b) => a.ts - b.ts)) {
+    const ph = prof(r.h), pa = prof(r.a); if (ph || pa) TP.set(r.id, { h: ph, a: pa });
+    if (['FT', 'AET', 'PEN'].includes(r.st) && r.hg != null) { get(r.h).push([r.hg, r.ag]); get(r.a).push([r.ag, r.hg]); }
+  }
+}
+
 const odds = FD ? {} : readJSON(path.join(ROOT, 'data/odds.json'), {});
 const bestOdds = FD ? {} : readJSON(path.join(ROOT, 'data/best.json'), {});
 const withOdds = x => {
@@ -27,10 +41,15 @@ const withOdds = x => {
   const f = FD && FDATA.odds[x.id];
   if (f) {
     x.od = f.m; x.bm = 'Bet365'; if (f.open) x.op = f.open; if (f.avg) x.avg = f.avg;
+    if (f.snap) { // price movement between the first and the latest snapshot before kick-off
+      const mv = (a, z) => Object.fromEntries(Object.keys(a || {}).filter(k => z && z[k]).map(k => [k, Math.round(1000 * (a[k] - z[k]) / a[k]) / 1000]));
+      x.mv = { b: mv(f.snap.first.b, f.snap.last.b), avg: mv(f.snap.first.avg, f.snap.last.avg), first: f.snap.first.b, hours: Math.round((f.snap.last.at - f.snap.first.at) / 360) / 10 };
+    }
     if (f.best) { x.best = Object.fromEntries(Object.entries(f.best).map(([k, v]) => [k, [v, 'best on the market']])); }
   }
   const g = judge(G.get(x.id), x.od); if (g) x.g = g;
   const bo = bestOdds[x.id]; if (bo && bo.b) { x.best = bo.b; x.nb = bo.n; }
+  const tp = TP.get(x.id); if (tp) x.tp = tp;
   const r = R.get(x.id);
   if (r) { const p = { '1': r.H, X: r.D, '2': r.A }, r3 = v => Math.round(v * 1000) / 1000;
     x.r = { '1': r3(r.H), X: r3(r.D), '2': r3(r.A), pick: Object.keys(p).sort((a, b) => p[b] - p[a])[0], lh: Math.round(r.lh * 100) / 100, la: Math.round(r.la * 100) / 100 }; }
@@ -52,16 +71,38 @@ const LINE = { O: 'Over', U: 'Under' };
 // tracked on paper ('alt'), but were taken out of the Top 3 on 2 Nov 2026 after the historical
 // odds test: Under 2.5 value picks lost 13–16% at real Bet365 prices; 1.5/3.5 lines are untested.
 const TOP3_ALT = false;
+// Market movement (needs two price snapshots before kick-off). Tested on 2022–26 Bet365 prices:
+// Overs whose price shortened 8%+ went over more often than the final price said, and backing the
+// other side lost 9–25%; bets whose price drifted 5%+ lost 12% at the early price. So: never back a
+// selection the market is moving against.
+const OPP = { O: 'U', U: 'O', 'O2.5': 'U2.5', 'U2.5': 'O2.5' };
+const KEYMAP = { 'O2.5': 'O', 'U2.5': 'U' };
+function moveOf(x, m) { const k = KEYMAP[m] || m; return x.mv && x.mv.b[k] != null ? x.mv.b[k] : null; }
+function against(x, m) {
+  const mv = moveOf(x, m); if (mv != null && mv <= -0.05) return true;
+  const o = OPP[m]; const mo = o != null ? moveOf(x, o) : null; return mo != null && mo >= 0.05;
+}
+// Possible public-money trap: Bet365 shortened 8%+ but the market average moved less than 3%.
+function softMove(x, k) { if (!x.mv || x.mv.b[k] == null || x.mv.avg[k] == null) return false; return x.mv.b[k] >= 0.08 && x.mv.avg[k] < 0.03; }
+// Picks to leave out: the market is moving against them, or Bet365 alone shortened them (possible trap).
+const avoid = (x, m) => against(x, m) || softMove(x, KEYMAP[m] || m);
+function moveTag(x, m) {
+  const k = KEYMAP[m] || m, mv = moveOf(x, m);
+  if (softMove(x, k)) return { t: 'soft', mv };
+  if (against(x, m)) return { t: 'against', mv };
+  if (mv != null && mv >= 0.05) return { t: 'towards', mv };
+  return mv != null ? { t: 'flat', mv } : null;
+}
 function goalsPick(x) {
   const c = [];
-  if (x.g && x.g.strong) c.push({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, p: x.g.p, v: x.g.p * x.g.o, why: x.g.pass });
+  if (x.g && x.g.strong && !avoid(x, 'O2.5')) c.push({ x, m: 'O2.5', kind: 'Over 2.5 goals', odd: x.g.o, p: x.g.p, v: x.g.p * x.g.o, why: x.g.pass });
   if (TOP3_ALT && x.g && x.g.alt) { const a = x.g.alt; c.push({ x, m: a.k, kind: `${LINE[a.k[0]]} ${a.k.slice(1)} goals`, odd: a.o, p: a.p, v: a.v,
     why: [`our chance ${pct0(a.p)}${a.fair != null ? ` vs bookmaker ${pct0(a.fair)}` : ''}`, `value ${a.v.toFixed(2)} (need ${ALT.minEdge}+)`, `odds ${a.o.toFixed(2)}`, 'league match'] }); }
   return c.sort((a, b) => b.v - a.v)[0] || null;
 }
 function top3(xs, n = 3) {
   const over = xs.map(goalsPick).filter(Boolean).sort((a, b) => b.v - a.v);
-  const book = xs.filter(x => {
+  const book = xs.filter(x => !(x.p && avoid(x, x.p.pick))).filter(x => {
     if (!(x.p && x.r && x.od && (x.p.conf === 'high' || x.p.conf === 'medium'))) return false;
     const odd = x.od[x.p.pick], mg = x.od['1'] && x.od.X && x.od['2'] ? 1 / x.od['1'] + 1 / x.od.X + 1 / x.od['2'] - 1 : 1;
     return odd >= BOOK.minOdds && odd <= BOOK.maxOdds && mg <= BOOK.maxMargin && x.r[x.p.pick] * odd >= BOOK.minEdge;
@@ -97,7 +138,7 @@ function overScore(x) {
   if (!x.g || !x.od || !x.od['O2.5'] || !x.od['U2.5']) return null;
   const f = fairProb(x.od, 'O2.5'); return f == null ? null : (x.g.p + f) / 2;
 }
-const overTop = xs => xs.map(x => ({ x, s: overScore(x) })).filter(c => c.s != null).sort((a, b) => b.s - a.s).slice(0, 3);
+const overTop = xs => xs.filter(x => !avoid(x, 'O2.5')).map(x => ({ x, s: overScore(x) })).filter(c => c.s != null).sort((a, b) => b.s - a.s).slice(0, 3);
 // Weekend slip (Saturday and Sunday): a 10–12 selection accumulator aiming at total odds 40–60.
 // Each match offers its likeliest selection: Over 2.5 (average of our goals model and the
 // bookmaker) or the favourite to win (average of the ratings model and the bookmaker), odds
@@ -110,7 +151,7 @@ function slipLegs(xs) {
     const opts = [];
     const so = overScore(x); if (so != null) opts.push({ m: 'O2.5', p: so });
     if (x.r && x.od) for (const k of ['1', '2']) { const f = fairProb(x.od, k); if (f != null) opts.push({ m: k, p: (x.r[k] + f) / 2 }); }
-    const ok = opts.map(o => ({ ...o, x, odd: priceOf(x, o.m) })).filter(o => o.odd >= SLIP.legMin && o.odd <= SLIP.legMax);
+    const ok = opts.map(o => ({ ...o, x, odd: priceOf(x, o.m) })).filter(o => o.odd >= SLIP.legMin && o.odd <= SLIP.legMax && !avoid(x, o.m));
     if (ok.length) cand.push(ok.sort((a, b) => b.p - a.p)[0]);
   }
   cand.sort((a, b) => b.p - a.p);
@@ -171,7 +212,8 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best', 'slip', 'motiv']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const x of settledAll) if (softMove(x, 'O') && x.od && x.od['U2.5']) addBet('softmove', priceOf(x, 'U2.5'), lineHit('U2.5', x));
 for (const x of settledAll) { const c = motivPick(x); if (c) addBet('motiv', c.odd, hitTop(c, x)); }
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
@@ -326,14 +368,15 @@ writeJSON(path.join(out, 'top3.json'), {
     sharp: (T3.get(d) || []).filter(x => x.ts > now).flatMap(sharpPicks).sort((a, b) => b.v - a.v).slice(0, 5)
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
     over: overTop((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600)).map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, p: Math.round(c.s * 1000) / 1000,
-      ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now })),
+      ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now, move: moveTag(c.x, 'O2.5'), tp: c.x.tp || null })),
+    soft: (T3.get(d) || []).filter(x => x.ts > now && softMove(x, 'O') && x.od && x.od['U2.5']).map(x => ({ ts: x.ts, hn: x.hn, an: x.an, lg: x.lg, m: 'U2.5', odd: priceOf(x, 'U2.5'), mvB: x.mv.b.O, mvAvg: x.mv.avg.O, tp: x.tp || null })),
     slip: isWeekend(d) ? (s => s && { odds: Math.round(s.odds * 100) / 100, chance: Math.round(s.chance * 10000) / 10000,
-      legs: s.legs.map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, p: Math.round(c.p * 1000) / 1000, started: c.x.ts <= now })) })(slipLegs((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600))) : null,
+      legs: s.legs.map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, p: Math.round(c.p * 1000) / 1000, started: c.x.ts <= now, move: moveTag(c.x, c.m) })) })(slipLegs((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600))) : null,
     proven: (T3.get(d) || []).filter(x => x.ts > now - 3 * 3600).map(motivPick).filter(Boolean)
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, b365: c.b365, rule: 'End of season: motivated v nothing to play for', why: c.why })),
     picks: top3(T3.get(d) || []).map(c => ({
     ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, kind: c.kind, odd: c.odd, why: c.why, p: c.p, started: c.x.ts <= now,
-    best: bestOf(c.x, c.m), nb: c.x.nb || null,
+    best: bestOf(c.x, c.m), nb: c.x.nb || null, move: moveTag(c.x, c.m), tp: c.x.tp || null,
   })) })),
 });
 // Shortlist for line shopping (scripts/shop.js): the top 6 candidates of today and tomorrow
