@@ -351,9 +351,16 @@ function renderPaper(S, el) {
   }).join('');
   el.innerHTML = `<div class="card note">A pretend €${P.stake} on every bet, at the odds recorded before kick-off. No real money. A strategy only works if it ends up above zero over hundreds of bets. Each card shows the likely range of the true long-run return: only when the whole range is above zero is it more than luck.</div>
     <div class="card note"><b>Beat later price</b> (closing line value): the first odds we recorded compared with the bookmaker's own chance at the last run before kick-off, with its margin removed. Consistently positive means our picks find prices before the market corrects them — the earliest sign of a real edge, visible long before profit is reliable. Always the favourite shows what “no edge” looks like.</div>
-    <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}${top3Hist(P.overRecent, 'Recent Over 2.5 daily 3')}${slipHist(P)}` +
+    <div class="grid">${cards}</div>${vsMarket(P)}${sized(P.sized)}${chart(P.timeline)}${top3Hist(P.top3Recent)}${top3Hist(P.overRecent, 'Recent Over 2.5 daily 3')}${slipHist(P)}${pinLogHist(P.pinLog)}` +
     table('Book’s pick by league (10+ bets)', P.byLeague, [['League', k => `<td>${esc(k)}</td>`], ['Bets', (k, v) => `<td class="n">${v.bets}</td>`], ['Won', (k, v) => `<td class="n">${pct(v.won, v.bets)}</td>`], ['Profit', (k, v) => `<td class="n" style="color:${v.profit >= 0 ? 'var(--win)' : 'var(--loss)'}">${eur(v.profit)}</td>`]], 10);
 }
+const pinLogHist = L => {
+  if (!L || !L.logged) return '';
+  const say = c => /^[OU]\d/.test(c.m) ? `${c.m[0] === 'O' ? 'Over' : 'Under'} ${c.m.slice(1)}` : { '1': `${c.hn} win`, X: 'Draw', '2': `${c.an} win` }[c.m];
+  const sign = v => v == null ? '–' : `<span style="color:${v >= 0 ? 'var(--win)' : 'var(--loss)'}">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
+  return `<h3 style="margin-top:18px">Price beats Pinnacle — picks as shown</h3><div class="note">Each pick is saved with the price and Pinnacle’s true chance when it first appeared. “Beat later price” compares our price with Pinnacle’s later price before kick-off: beating it on most picks is the quickest honest sign of a real edge. ${L.logged} picks logged, ${L.withLater} with a later Pinnacle price, ${L.graded} settled (${L.won} won, ${L.profit >= 0 ? '+' : ''}€${L.profit.toFixed(2)} at €10 a pick).</div>
+  <table><tr><th>Match</th><th>Pick</th><th class="n">Odds</th><th class="n">Chance then → later</th><th class="n">Beat later price</th><th class="n">Result</th></tr>${L.recent.map(c => `<tr><td>${esc(c.hn)} v ${esc(c.an)}<div class="t">${new Date(c.ts * 1000).toLocaleDateString([], { day: 'numeric', month: 'short' })}</div></td><td>${esc(say(c))}</td><td class="n">${c.odd.toFixed(2)}</td><td class="n">${Math.round(c.fair0 * 100)}% → ${c.fairL != null ? Math.round(c.fairL * 100) + '%' : '–'}</td><td class="n">${sign(c.clv)}</td><td class="n">${c.ok == null ? '–' : (c.ok ? '✓ ' : '✗ ') + esc(c.sc || '')}</td></tr>`).join('')}</table>`;
+};
 const clvLine = c => c && c.n ? `<div class="c" title="First price we saw compared with the bookmaker's later price, margin removed. Positive means we beat the market.">Beat later price: <b style="color:${c.avg >= 0 ? 'var(--win)' : 'var(--loss)'}">${c.avg >= 0 ? '+' : ''}${c.avg.toFixed(1)}%</b> avg · ${c.pos}% of ${c.n}</div>` : '';
 function vsMarket(P) {
   const V = P.vsMarket || {}, B = P.brier || {}, keys = Object.keys(PM).filter(k => V[k] && V[k].n);
