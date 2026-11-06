@@ -73,7 +73,7 @@ function prices(bm, home, away) {
         if (!soon.length) { log.skipped.push(`${code}: no match in ${WINDOW_H} h`); await sleep(500); continue; }
       }
       const r = await call(`/sports/${sport}/odds`, { regions: 'eu', markets: 'h2h,totals', bookmakers: 'pinnacle,betfair_ex_eu', oddsFormat: 'decimal' });
-      budget -= COST; left = r.left;
+      budget -= COST; left = r.left; if (r.used != null) sp.used = r.used; // so the next events check compares against this call
       let n = 0;
       for (const e of r.data) {
         const ts = Math.floor(Date.parse(e.commence_time) / 1000); if (ts <= now) continue; // before kick-off only
