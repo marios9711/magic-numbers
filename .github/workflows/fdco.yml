@@ -23,6 +23,10 @@ jobs:
           node-version: 22
       - name: Download results and upcoming fixtures with odds (no API key)
         run: node scripts/fdco.js
+      - name: Pinnacle and Betfair Exchange prices (The Odds API, free plan)
+        env:
+          ODDSAPI_KEY: ${{ secrets.ODDSAPI_KEY }}
+        run: node scripts/pinnacle.js || echo "pinnacle.js failed — site builds without Pinnacle prices"
       - name: Build the backup site
         run: |
           # One-time move: keep the API-Football site's last data under docs/api/ before the main site switches.
@@ -34,6 +38,7 @@ jobs:
           git config user.name "magic-numbers-bot"
           git config user.email "actions@users.noreply.github.com"
           git add data/fdco docs
+          if [ -f data/sharp.json ]; then git add data/sharp.json; fi
           git diff --cached --quiet || git commit -m "Backup source update $(date -u +%F\ %H:%M)"
           git pull --rebase
           git push
