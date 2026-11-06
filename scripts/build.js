@@ -9,6 +9,7 @@ const { ratingsModel } = require('./ratings');
 
 const FD = process.env.SOURCE === 'fd';
 const FDATA = FD ? require('./fdsource').load() : null;
+const { fillO25, LEAGUES: FDL } = require('./fdsource');
 const dir = path.join(ROOT, 'data/days');
 const files = FD ? [] : fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort() : [];
 const byId = new Map();
@@ -138,12 +139,15 @@ function sharpPicks(x) {
 // >= 1.02 returned +4.0% over 3,708 bets (+4.5% in 2024), >= 1.04 +6.5% over 985 — promising, not proven.
 // The 1.02 threshold was fixed before any live data; do not tune it on live results.
 const PINN = { minEdge: 1.02, maxOdds: 5 };
-function pinPicks(x) {
+// mode 'b365' (default): Bet365's price only — the bookmaker Marios can use. mode 'best': the best price
+// on the market (often bookmakers he cannot use), kept as a comparison. Historical check (17 leagues,
+// 2022–26, Pinnacle pre-match): Bet365 >= 1.02 -6.2% over 466 bets; best price >= 1.02 +4.0% over 4,004.
+function pinPicks(x, mode = 'b365') {
   if (!x.pin) return [];
   const out = [];
   for (const k of ['1', 'X', '2', 'O2.5', 'U2.5']) {
     const fp = fairProb(x.pin, k); if (fp == null) continue;
-    const cands = [[x.best && x.best[k] && x.best[k][0], 'best on the market'], [x.od && x.od[k], 'Bet365']].filter(c => c[0] > 1).sort((a, b) => b[0] - a[0]);
+    const cands = [...(mode === 'best' ? [[x.best && x.best[k] && x.best[k][0], 'best on the market']] : []), [x.od && x.od[k], 'Bet365']].filter(c => c[0] > 1).sort((a, b) => b[0] - a[0]);
     if (!cands.length) continue;
     const [odd, where] = cands[0];
     if (odd <= PINN.maxOdds && odd * fp >= PINN.minEdge) out.push({ x, m: k, odd, where, fair: fp, v: odd * fp, pinOdd: x.pin[k], estFrom: k[0] === 'O' || k[0] === 'U' ? x.pin.estFrom || null : null });
@@ -231,7 +235,7 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'pinn', 'pinnest', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'pinn', 'pinnest', 'pinnbest', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 // (defined before first use: the softmove and motiv loops below call it)
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (softMove(x, 'O') && x.od && x.od['U2.5']) addBet('softmove', priceOf(x, 'U2.5'), lineHit('U2.5', x));
@@ -241,6 +245,7 @@ for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd
 // Over/Under picks whose 2.5 price was estimated from another Pinnacle goal line are tracked apart
 // ('pinnest'): the historical +4% evidence used real 2.5 prices only.
 for (const x of settledAll) for (const c of pinPicks(x)) addBet(c.estFrom ? 'pinnest' : 'pinn', c.odd, hitTop(c, x));
+for (const x of settledAll) for (const c of pinPicks(x, 'best')) if (!c.estFrom) addBet('pinnbest', c.odd, hitTop(c, x));
 paper.pinCover = { settled: settledAll.filter(x => x.pin).length, upcoming: upcoming.filter(x => x.pin).length, log: FD ? readJSON(path.join(ROOT, 'data/sharp.json'), {}).log || null : null };
 for (const x of settledAll) if (x.g && x.g.alt) addBet('alt', x.g.alt.o, lineHit(x.g.alt.k, x));
 const top3Hist = [];
@@ -417,6 +422,23 @@ writeJSON(path.join(out, 'settled.json'), settled);
 writeJSON(path.join(out, 'stats.json'), S);
 // Today's and tomorrow's Top 3 from all of that day's matches (kicked off or not), so the
 // list matches what paper betting grades afterwards.
+// Minimum odds worth taking, straight from the stored Pinnacle prices (no need for football-data's
+// fixture list): Pinnacle's margin-free price x 1.02. Any bookmaker (Bet365, Stoiximan, Novibet ...)
+// offering this or more is a value price by the "Price beats Pinnacle" rule. Bet365 shown when known.
+const pinMin = [];
+if (FD) {
+  const store = readJSON(path.join(ROOT, 'data/sharp.json'), { events: {} }), b365 = {};
+  for (const [rid, v] of Object.entries(FDATA.pin || {})) if (v.ev) b365[v.ev] = rid;
+  const odOf = new Map(results.filter(x => x.row.ts > now).map(slim).map(withOdds).map(x => [String(x.id), x.od]));
+  for (const [id, e] of Object.entries(store.events || {})) {
+    if (e.ts <= now || !e.last || !e.last.pin) continue;
+    const pin = fillO25(e.last.pin), min = {}, od = odOf.get(String(b365[id])) || null;
+    for (const k of ['1', 'X', '2', 'O2.5', 'U2.5']) { const fp = fairProb(pin, k); if (fp != null) min[k] = Math.round(100 * PINN.minEdge / fp) / 100; }
+    if (!Object.keys(min).length) continue;
+    pinMin.push({ ts: e.ts, hn: e.home, an: e.away, code: e.code, lg: FDL[e.code] ? `${FDL[e.code][1]} – ${FDL[e.code][2]}` : e.code, min, est: pin.estFrom || null, b365: od ? Object.fromEntries(['1', 'X', '2', 'O2.5', 'U2.5'].filter(k => od[k]).map(k => [k, od[k]])) : null, at: e.last.at });
+  }
+  pinMin.sort((a, b) => a.ts - b.ts);
+}
 const allDay = results.filter(x => dayKey(x.row.ts) >= dayKey(now)).map(slim).map(withOdds);
 const T3 = byDay(allDay);
 writeJSON(path.join(out, 'top3.json'), {
@@ -425,6 +447,7 @@ writeJSON(path.join(out, 'top3.json'), {
   days: (FD ? [0, 1, 2, 3] : [0, 1]).map(o => dayKey(now + o * 864e2)).map(d => ({ d,
     sharp: (T3.get(d) || []).filter(x => x.ts > now).flatMap(sharpPicks).sort((a, b) => b.v - a.v).slice(0, 5)
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
+    pinMin: pinMin.filter(e => dayKey(e.ts) === d),
     pinn: (T3.get(d) || []).filter(x => x.ts > now).flatMap(pinPicks).sort((a, b) => (!!a.estFrom - !!b.estFrom) || b.v - a.v).slice(0, 5) // real Pinnacle prices first
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, where: c.where, pin: c.pinOdd, from: c.estFrom, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
     over: overTop((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600)).map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, p: Math.round(c.s * 1000) / 1000,

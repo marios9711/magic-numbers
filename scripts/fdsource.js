@@ -119,7 +119,7 @@ function matchSharp(rows) {
   const byCode = new Map();
   for (const r of rows) { const c = r.h.split(':')[0]; if (!byCode.has(c)) byCode.set(c, []); byCode.get(c).push(r); }
   const used = new Map(); // row id -> score, so the best-fitting event wins a row
-  for (const e of Object.values(store.events || {})) {
+  for (const [ev, e] of Object.entries(store.events || {})) {
     let best = null;
     for (const r of byCode.get(e.code) || []) {
       if (Math.abs(r.ts - e.ts) > 6 * 3600) continue;
@@ -128,7 +128,7 @@ function matchSharp(rows) {
     }
     if (best && (!used.has(best.r.id) || used.get(best.r.id) < best.sc)) {
       used.set(best.r.id, best.sc);
-      out[best.r.id] = { pin: fillO25(e.last.pin), bfx: e.last.bfx, pin0: fillO25(e.first.pin), at: e.last.at, at0: e.first.at };
+      out[best.r.id] = { pin: fillO25(e.last.pin), bfx: e.last.bfx, pin0: fillO25(e.first.pin), at: e.last.at, at0: e.first.at, ev };
     }
   }
   return out;
