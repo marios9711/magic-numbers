@@ -288,6 +288,38 @@ for (const [, xs] of byDay(settledAll)) for (const c of top3(xs)) addClv('top3',
 for (const k in clv) { const a = clv[k]; clv[k] = { n: a.n, avg: Math.round(1000 * a.sum / a.n) / 10, pos: Math.round(1000 * a.pos / a.n) / 10 }; }
 paper.clv = clv;
 
+// "Price beats Pinnacle" picks as shown: each pick is logged the first time it appears (price and
+// Pinnacle's margin-free chance at that moment). While the match has not started, later Pinnacle
+// prices update the log, so we can see whether our price beat Pinnacle's later price (closing line
+// value: odds taken x Pinnacle's later chance - 1). Beating it consistently is the fastest honest
+// sign of a real edge (tens of picks, not thousands). Results grade the logged price.
+if (FD) {
+  const LOG = path.join(ROOT, 'data/fdco/pinlog.json'), log = readJSON(LOG, {});
+  for (const x of upcoming) {
+    if (x.ts <= now || !x.pin) continue;
+    const at = (FDATA.pin[x.id] || {}).at || Math.floor(now);
+    for (const c of pinPicks(x)) {
+      const k = `${x.id}|${c.m}`;
+      if (!log[k]) log[k] = { id: x.id, m: c.m, hn: x.hn, an: x.an, lg: x.lg, ts: x.ts, odd: c.odd, where: c.where, fair0: Math.round(c.fair * 10000) / 10000, at0: at };
+    }
+    for (const k in log) { // later Pinnacle price for every logged pick of this match
+      const e = log[k]; if (e.id !== x.id || at <= e.at0) continue;
+      const f = fairProb(x.pin, e.m); if (f != null) { e.fairL = Math.round(f * 10000) / 10000; e.atL = at; }
+    }
+  }
+  const done = new Map(settledAll.map(x => [x.id, x]));
+  for (const k in log) { const e = log[k], x = done.get(e.id); if (x && e.ok == null) { e.ok = hitTop({ m: e.m }, x); e.sc = `${x.hg}–${x.ag}`; } }
+  for (const k in log) if (now - log[k].ts > 120 * 864e2) delete log[k];
+  writeJSON(LOG, log);
+  const all = Object.values(log), later = all.filter(e => e.fairL != null), graded = all.filter(e => e.ok != null);
+  const cl = later.map(e => e.odd * e.fairL - 1);
+  if (later.length) clv.pinn = { n: later.length, avg: Math.round(1000 * cl.reduce((a, v) => a + v, 0) / later.length) / 10, pos: Math.round(1000 * cl.filter(v => v > 0).length / later.length) / 10 };
+  const pr = graded.reduce((a, e) => a + (e.ok ? STAKE * (e.odd - 1) : -STAKE), 0);
+  paper.pinLog = { logged: all.length, withLater: later.length, graded: graded.length, won: graded.filter(e => e.ok).length, profit: Math.round(pr * 100) / 100,
+    recent: all.sort((a, b) => b.ts - a.ts).slice(0, 20).map(e => ({ ts: e.ts, hn: e.hn, an: e.an, m: e.m, odd: e.odd, fair0: e.fair0, fairL: e.fairL ?? null,
+      clv: e.fairL != null ? Math.round(1000 * (e.odd * e.fairL - 1)) / 10 : null, ok: e.ok ?? null, sc: e.sc || null })) };
+}
+
 // Against the bookmaker: how often each bet type won compared with how often the bookmaker's
 // own (margin-free) price said it should. Positive gap = we pick better than the market.
 const vm = {};
