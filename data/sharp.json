@@ -1,1 +1,1 @@
-{"events":{},"log":{"at":"2026-11-06T10:09:24.595Z","called":[],"skipped":[],"errors":["ODDSAPI_KEY secret is not set — skipped"]}}
+{"events":{},"log":{"at":"2026-11-06T10:12:45.822Z","called":[],"skipped":[],"errors":["HTTP 401 for /sports: {\"message\":\"API key is not valid. Get an API key at https://the-odds-api.com\",\"error_code\":\"INVALID_KEY\",\"details_url\":\"https://the-odds-api.com/liveapi/guides/v4/api-error-codes.html#invalid-key\"}\n"]}}
