@@ -146,7 +146,7 @@ function pinPicks(x) {
     const cands = [[x.best && x.best[k] && x.best[k][0], 'best on the market'], [x.od && x.od[k], 'Bet365']].filter(c => c[0] > 1).sort((a, b) => b[0] - a[0]);
     if (!cands.length) continue;
     const [odd, where] = cands[0];
-    if (odd <= PINN.maxOdds && odd * fp >= PINN.minEdge) out.push({ x, m: k, odd, where, fair: fp, v: odd * fp, pinOdd: x.pin[k] });
+    if (odd <= PINN.maxOdds && odd * fp >= PINN.minEdge) out.push({ x, m: k, odd, where, fair: fp, v: odd * fp, pinOdd: x.pin[k], estFrom: k[0] === 'O' || k[0] === 'U' ? x.pin.estFrom || null : null });
   }
   return out;
 }
@@ -231,14 +231,16 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'pinn', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'pinn', 'pinnest', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
 // (defined before first use: the softmove and motiv loops below call it)
 const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (softMove(x, 'O') && x.od && x.od['U2.5']) addBet('softmove', priceOf(x, 'U2.5'), lineHit('U2.5', x));
 for (const x of settledAll) { const c = motivPick(x); if (c) addBet('motiv', c.odd, hitTop(c, x)); }
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
 for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd, hitTop(c, x));
-for (const x of settledAll) for (const c of pinPicks(x)) addBet('pinn', c.odd, hitTop(c, x));
+// Over/Under picks whose 2.5 price was estimated from another Pinnacle goal line are tracked apart
+// ('pinnest'): the historical +4% evidence used real 2.5 prices only.
+for (const x of settledAll) for (const c of pinPicks(x)) addBet(c.estFrom ? 'pinnest' : 'pinn', c.odd, hitTop(c, x));
 paper.pinCover = { settled: settledAll.filter(x => x.pin).length, upcoming: upcoming.filter(x => x.pin).length, log: FD ? readJSON(path.join(ROOT, 'data/sharp.json'), {}).log || null : null };
 for (const x of settledAll) if (x.g && x.g.alt) addBet('alt', x.g.alt.o, lineHit(x.g.alt.k, x));
 const top3Hist = [];
@@ -300,7 +302,7 @@ if (FD) {
     const at = (FDATA.pin[x.id] || {}).at || Math.floor(now);
     for (const c of pinPicks(x)) {
       const k = `${x.id}|${c.m}`;
-      if (!log[k]) log[k] = { id: x.id, m: c.m, hn: x.hn, an: x.an, lg: x.lg, ts: x.ts, odd: c.odd, where: c.where, fair0: Math.round(c.fair * 10000) / 10000, at0: at };
+      if (!log[k]) log[k] = { id: x.id, m: c.m, hn: x.hn, an: x.an, lg: x.lg, ts: x.ts, odd: c.odd, where: c.where, fair0: Math.round(c.fair * 10000) / 10000, at0: at, est: c.estFrom || null };
     }
     for (const k in log) { // later Pinnacle price for every logged pick of this match
       const e = log[k]; if (e.id !== x.id || at <= e.at0) continue;
@@ -312,12 +314,14 @@ if (FD) {
   for (const k in log) if (now - log[k].ts > 120 * 864e2) delete log[k];
   writeJSON(LOG, log);
   const all = Object.values(log), later = all.filter(e => e.fairL != null), graded = all.filter(e => e.ok != null);
-  const cl = later.map(e => e.odd * e.fairL - 1);
-  if (later.length) clv.pinn = { n: later.length, avg: Math.round(1000 * cl.reduce((a, v) => a + v, 0) / later.length) / 10, pos: Math.round(1000 * cl.filter(v => v > 0).length / later.length) / 10 };
+  for (const [key, xs] of [['pinn', later.filter(e => !e.est)], ['pinnest', later.filter(e => e.est)]]) {
+    const cl = xs.map(e => e.odd * e.fairL - 1);
+    if (xs.length) clv[key] = { n: xs.length, avg: Math.round(1000 * cl.reduce((a, v) => a + v, 0) / xs.length) / 10, pos: Math.round(1000 * cl.filter(v => v > 0).length / xs.length) / 10 };
+  }
   const pr = graded.reduce((a, e) => a + (e.ok ? STAKE * (e.odd - 1) : -STAKE), 0);
   paper.pinLog = { logged: all.length, withLater: later.length, graded: graded.length, won: graded.filter(e => e.ok).length, profit: Math.round(pr * 100) / 100,
     recent: all.sort((a, b) => b.ts - a.ts).slice(0, 20).map(e => ({ ts: e.ts, hn: e.hn, an: e.an, m: e.m, odd: e.odd, fair0: e.fair0, fairL: e.fairL ?? null,
-      clv: e.fairL != null ? Math.round(1000 * (e.odd * e.fairL - 1)) / 10 : null, ok: e.ok ?? null, sc: e.sc || null })) };
+      clv: e.fairL != null ? Math.round(1000 * (e.odd * e.fairL - 1)) / 10 : null, ok: e.ok ?? null, sc: e.sc || null, est: e.est || null })) };
 }
 
 // Against the bookmaker: how often each bet type won compared with how often the bookmaker's
@@ -421,8 +425,8 @@ writeJSON(path.join(out, 'top3.json'), {
   days: (FD ? [0, 1, 2, 3] : [0, 1]).map(o => dayKey(now + o * 864e2)).map(d => ({ d,
     sharp: (T3.get(d) || []).filter(x => x.ts > now).flatMap(sharpPicks).sort((a, b) => b.v - a.v).slice(0, 5)
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
-    pinn: (T3.get(d) || []).filter(x => x.ts > now).flatMap(pinPicks).sort((a, b) => b.v - a.v).slice(0, 5)
-      .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, where: c.where, pin: c.pinOdd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
+    pinn: (T3.get(d) || []).filter(x => x.ts > now).flatMap(pinPicks).sort((a, b) => (!!a.estFrom - !!b.estFrom) || b.v - a.v).slice(0, 5) // real Pinnacle prices first
+      .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, where: c.where, pin: c.pinOdd, from: c.estFrom, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
     over: overTop((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600)).map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, p: Math.round(c.s * 1000) / 1000,
       ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now, move: moveTag(c.x, 'O2.5'), tp: c.x.tp || null })),
     soft: (T3.get(d) || []).filter(x => x.ts > now && softMove(x, 'O') && x.od && x.od['U2.5']).map(x => ({ ts: x.ts, hn: x.hn, an: x.an, lg: x.lg, m: 'U2.5', odd: priceOf(x, 'U2.5'), mvB: x.mv.b.O, mvAvg: x.mv.avg.O, tp: x.tp || null })),

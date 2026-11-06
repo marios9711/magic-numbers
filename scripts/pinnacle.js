@@ -45,7 +45,14 @@ function prices(bm, home, away) {
   const m = {};
   for (const mk of bm.markets || []) {
     if (mk.key === 'h2h') for (const o of mk.outcomes) { const k = o.name === home ? '1' : o.name === away ? '2' : o.name === 'Draw' ? 'X' : null; if (k && o.price > 1) m[k] = o.price; }
-    if (mk.key === 'totals') for (const o of mk.outcomes) if (o.point === 2.5 && o.price > 1) m[o.name === 'Over' ? 'O2.5' : 'U2.5'] = o.price;
+    if (mk.key === 'totals') for (const o of mk.outcomes) {
+      if (!(o.price > 1) || o.point == null) continue;
+      if (o.point === 2.5) m[o.name === 'Over' ? 'O2.5' : 'U2.5'] = o.price;
+      else { // main goal line is not 2.5 (e.g. 2.25, 2.75, 3): keep it; fdsource.js estimates 2.5 from it
+        m.tot = m.tot || { pt: o.point };
+        if (o.point === m.tot.pt) m.tot[o.name === 'Over' ? 'o' : 'u'] = o.price;
+      }
+    }
   }
   return Object.keys(m).length ? m : null;
 }

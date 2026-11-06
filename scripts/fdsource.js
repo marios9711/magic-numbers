@@ -92,6 +92,28 @@ function sim(apiName, fdName) {
   const dice = (2 * common) / (ga.length + gb.length);
   return Math.max(tk * 0.95, dice);
 }
+// Pinnacle often quotes its main goal line at 2.25, 2.75 or 3 instead of 2.5. Estimate a fair
+// Over/Under 2.5 price from that line: find the average total goals (Poisson) at which the line's
+// margin-free Over/Under split matches Pinnacle's, then read off the chance of 3+ goals.
+// Quarter lines (x.25 / x.75) are half on each neighbouring line; whole lines refund on the exact total.
+const pois = (k, l) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
+function lineFair(pt, l) { // model's fair Over and Under odds for a goal line at average total l
+  const parts = Math.abs(pt * 4 % 2 - 1) < 1e-9 ? [pt - 0.25, pt + 0.25] : [pt];
+  let ow = 0, ol = 0, uw = 0, ul = 0;
+  for (const c of parts) for (let g = 0; g <= 15; g++) {
+    const p = pois(g, l);
+    if (g > c) { ow += p; ul += p; } else if (g < c) { ol += p; uw += p; } // g === c: stake back
+  }
+  return { o: 1 + ol / ow, u: 1 + ul / uw };
+}
+function fillO25(pin) {
+  if (!pin || pin['O2.5'] || !pin.tot || !(pin.tot.o > 1) || !(pin.tot.u > 1)) return pin;
+  const { pt, o, u } = pin.tot, share = (1 / o) / (1 / o + 1 / u);
+  let lo = 0.3, hi = 7;
+  for (let i = 0; i < 60; i++) { const l = (lo + hi) / 2, f = lineFair(pt, l), s = (1 / f.o) / (1 / f.o + 1 / f.u); if (s < share) lo = l; else hi = l; }
+  const l = (lo + hi) / 2, under = pois(0, l) + pois(1, l) + pois(2, l);
+  return { ...pin, 'O2.5': Math.round(100000 / (1 - under)) / 100000, 'U2.5': Math.round(100000 / under) / 100000, estFrom: pt };
+}
 function matchSharp(rows) {
   const store = readJSON(path.join(ROOT, 'data/sharp.json'), { events: {} }), out = {};
   const byCode = new Map();
@@ -106,10 +128,10 @@ function matchSharp(rows) {
     }
     if (best && (!used.has(best.r.id) || used.get(best.r.id) < best.sc)) {
       used.set(best.r.id, best.sc);
-      out[best.r.id] = { pin: e.last.pin, bfx: e.last.bfx, pin0: e.first.pin, at: e.last.at, at0: e.first.at };
+      out[best.r.id] = { pin: fillO25(e.last.pin), bfx: e.last.bfx, pin0: fillO25(e.first.pin), at: e.last.at, at0: e.first.at };
     }
   }
   return out;
 }
 
-module.exports = { load, LEAGUES, sim };
+module.exports = { load, LEAGUES, sim, fillO25 };
