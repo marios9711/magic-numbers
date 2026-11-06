@@ -47,6 +47,8 @@ const withOdds = x => {
     }
     if (f.best) { x.best = Object.fromEntries(Object.entries(f.best).map(([k, v]) => [k, [v, 'best on the market']])); }
   }
+  const ps = FD && FDATA.pin && FDATA.pin[x.id]; // Pinnacle / Betfair Exchange (scripts/pinnacle.js)
+  if (ps && ps.pin) { x.pin = ps.pin; if (ps.bfx) x.bfx = ps.bfx; if (ps.pin0 && ps.at0 < ps.at) x.pin0 = ps.pin0; }
   const g = judge(G.get(x.id), x.od); if (g) x.g = g;
   const bo = bestOdds[x.id]; if (bo && bo.b) { x.best = bo.b; x.nb = bo.n; }
   const tp = TP.get(x.id); if (tp) x.tp = tp;
@@ -131,6 +133,23 @@ function sharpPicks(x) {
   }
   return out;
 }
+// Price beats Pinnacle: best price (football-data max or Bet365) x Pinnacle's margin-free chance
+// (power method) >= 1.02, odds <= 5. Historical test with Pinnacle pre-match prices (2022–24, 17 leagues):
+// >= 1.02 returned +4.0% over 3,708 bets (+4.5% in 2024), >= 1.04 +6.5% over 985 — promising, not proven.
+// The 1.02 threshold was fixed before any live data; do not tune it on live results.
+const PINN = { minEdge: 1.02, maxOdds: 5 };
+function pinPicks(x) {
+  if (!x.pin) return [];
+  const out = [];
+  for (const k of ['1', 'X', '2', 'O2.5', 'U2.5']) {
+    const fp = fairProb(x.pin, k); if (fp == null) continue;
+    const cands = [[x.best && x.best[k] && x.best[k][0], 'best on the market'], [x.od && x.od[k], 'Bet365']].filter(c => c[0] > 1).sort((a, b) => b[0] - a[0]);
+    if (!cands.length) continue;
+    const [odd, where] = cands[0];
+    if (odd <= PINN.maxOdds && odd * fp >= PINN.minEdge) out.push({ x, m: k, odd, where, fair: fp, v: odd * fp, pinOdd: x.pin[k] });
+  }
+  return out;
+}
 // Daily Over 2.5 Top 3: always the three matches most likely to have 3+ goals, ranked by the average
 // of our goals model and the bookmaker's own chance (margin removed). Historical test 2022–24 (Bet365
 // prices, 593 days): won 61.6% at average odds ~1.59, return −3.8% at Bet365 and −1.0% at the best price.
@@ -212,12 +231,15 @@ const MK = {
 };
 const paper = { stake: STAKE, markets: {}, byLeague: {}, timeline: [] };
 for (const k in MK) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
-for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+for (const k of ['over25', 'alt', 'top3', 'top3best', 'sharp', 'pinn', 'over3', 'over3best', 'slip', 'motiv', 'softmove']) paper.markets[k] = { bets: 0, won: 0, profit: 0 };
+// (defined before first use: the softmove and motiv loops below call it)
+const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (softMove(x, 'O') && x.od && x.od['U2.5']) addBet('softmove', priceOf(x, 'U2.5'), lineHit('U2.5', x));
 for (const x of settledAll) { const c = motivPick(x); if (c) addBet('motiv', c.odd, hitTop(c, x)); }
-const addBet = (k, odd, ok) => { const a = paper.markets[k], pr = ok ? STAKE * (odd - 1) : -STAKE; a.bets++; if (ok) a.won++; a.profit += pr; a.sq = (a.sq || 0) + (pr / STAKE) ** 2; };
 for (const x of settledAll) if (x.g && x.g.strong) addBet('over25', x.g.o, goalHit(x));
 for (const x of settledAll) for (const c of sharpPicks(x)) addBet('sharp', c.odd, hitTop(c, x));
+for (const x of settledAll) for (const c of pinPicks(x)) addBet('pinn', c.odd, hitTop(c, x));
+paper.pinCover = { settled: settledAll.filter(x => x.pin).length, upcoming: upcoming.filter(x => x.pin).length, log: FD ? readJSON(path.join(ROOT, 'data/sharp.json'), {}).log || null : null };
 for (const x of settledAll) if (x.g && x.g.alt) addBet('alt', x.g.alt.o, lineHit(x.g.alt.k, x));
 const top3Hist = [];
 for (const [d, xs] of byDay(settledAll)) {
@@ -367,6 +389,8 @@ writeJSON(path.join(out, 'top3.json'), {
   days: (FD ? [0, 1, 2, 3] : [0, 1]).map(o => dayKey(now + o * 864e2)).map(d => ({ d,
     sharp: (T3.get(d) || []).filter(x => x.ts > now).flatMap(sharpPicks).sort((a, b) => b.v - a.v).slice(0, 5)
       .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
+    pinn: (T3.get(d) || []).filter(x => x.ts > now).flatMap(pinPicks).sort((a, b) => b.v - a.v).slice(0, 5)
+      .map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, m: c.m, odd: c.odd, where: c.where, pin: c.pinOdd, fair: Math.round(c.fair * 1000) / 1000, v: Math.round(c.v * 1000) / 1000, b365: c.x.od && c.x.od[c.m] || null })),
     over: overTop((T3.get(d) || []).filter(x => x.ts > now - 3 * 3600)).map(c => ({ ts: c.x.ts, hn: c.x.hn, an: c.x.an, lg: c.x.lg, p: Math.round(c.s * 1000) / 1000,
       ours: c.x.g.p, mkt: Math.round(fairProb(c.x.od, 'O2.5') * 1000) / 1000, odd: c.x.od['O2.5'], best: bestOf(c.x, 'O2.5'), started: c.x.ts <= now, move: moveTag(c.x, 'O2.5'), tp: c.x.tp || null })),
     soft: (T3.get(d) || []).filter(x => x.ts > now && softMove(x, 'O') && x.od && x.od['U2.5']).map(x => ({ ts: x.ts, hn: x.hn, an: x.an, lg: x.lg, m: 'U2.5', odd: priceOf(x, 'U2.5'), mvB: x.mv.b.O, mvAvg: x.mv.avg.O, tp: x.tp || null })),

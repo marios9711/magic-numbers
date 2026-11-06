@@ -61,7 +61,55 @@ function load() {
   for (const f of files.filter(f => f.startsWith('res-'))) { const code = f.slice(4, -5); for (const o of readJSON(path.join(dir, f), [])) add(o, code, true); }
   for (const o of readJSON(path.join(dir, 'fixtures.json'), [])) add(o, o.Div, false);
   for (const o of readJSON(path.join(dir, 'fixtures-extra.json'), [])) add(o, BY_COUNTRY[o.Country], false);
-  return { rows: [...rows.values()], odds, files, status: readJSON(path.join(dir, 'status.json'), {}) };
+  const all = [...rows.values()];
+  return { rows: all, odds, pin: matchSharp(all), files, status: readJSON(path.join(dir, 'status.json'), {}) };
 }
 
-module.exports = { load, LEAGUES };
+// --- Pinnacle / Betfair Exchange prices from data/sharp.json (scripts/pinnacle.js) ----------------
+// The Odds API uses full club names ("Wolverhampton Wanderers"), football-data short ones ("Wolves").
+// A stored event is matched to a football-data row of the same league kicking off within 6 hours,
+// choosing the row whose two team names fit best. Rows are never created from these events.
+const ALIAS = { 'wolverhampton wanderers': 'wolves', 'nottingham forest': "nott'm forest", 'brighton and hove albion': 'brighton',
+  'paris saint germain': 'paris sg', 'borussia monchengladbach': "m'gladbach", 'atletico madrid': 'ath madrid', 'athletic bilbao': 'ath bilbao',
+  'inter milan': 'inter', 'ac milan': 'milan', 'sheffield wednesday': 'sheffield weds', 'queens park rangers': 'qpr',
+  'west bromwich albion': 'west brom', 'bayer leverkusen': 'leverkusen', 'eintracht frankfurt': 'ein frankfurt', 'celta vigo': 'celta',
+  'rayo vallecano': 'vallecano', 'real sociedad': 'sociedad', 'real betis': 'betis', 'espanyol': 'espanol', 'psv eindhoven': 'psv eindhoven',
+  'sporting lisbon': 'sp lisbon', 'sporting cp': 'sp lisbon', 'fc porto': 'porto', 'sc braga': 'sp braga', 'vitoria guimaraes': 'guimaraes',
+  'fenerbahce': 'fenerbahce', 'galatasaray': 'galatasaray', 'besiktas jk': 'besiktas', 'olympiacos piraeus': 'olympiakos', 'olympiacos': 'olympiakos',
+  'panathinaikos': 'panathinaikos', 'aek athens': 'aek', 'paok thessaloniki': 'paok', 'paok': 'paok' };
+const STOP = new Set(['fc', 'cf', 'afc', 'sc', 'ac', 'as', 'ss', 'us', 'sv', 'vfb', 'vfl', 'tsg', 'fk', 'sk', 'if', 'bk', 'cd', 'ud', 'sd', 'rc', 'rcd', 'club', 'de', 'the', 'and', 'calcio', '1899', '1900', '1910', '04', '05', '1846', 'hotspur', 'albion']);
+const norm = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/\butd\b/g, 'united').replace(/[^a-z0-9' ]/g, ' ').replace(/\s+/g, ' ').trim();
+const toks = s => norm(s).replace(/'/g, '').split(' ').filter(t => t && !STOP.has(t));
+const tokEq = (a, b) => a === b || (a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a)));
+const grams = s => { const t = ' ' + norm(s).replace(/'/g, '') + ' ', g = []; for (let i = 0; i < t.length - 1; i++) g.push(t.slice(i, i + 2)); return g; };
+function sim(apiName, fdName) {
+  const a0 = norm(apiName), b0 = norm(fdName);
+  if (a0 === b0 || ALIAS[a0] === b0) return 1;
+  const a = toks(apiName), b = toks(fdName);
+  const tk = a.length && b.length ? (b.filter(t => a.some(u => tokEq(t, u))).length / b.length + a.filter(t => b.some(u => tokEq(t, u))).length / a.length) / 2 : 0;
+  const ga = grams(apiName), gb = grams(fdName), pool = [...gb]; let common = 0;
+  for (const g of ga) { const i = pool.indexOf(g); if (i >= 0) { common++; pool.splice(i, 1); } }
+  const dice = (2 * common) / (ga.length + gb.length);
+  return Math.max(tk * 0.95, dice);
+}
+function matchSharp(rows) {
+  const store = readJSON(path.join(ROOT, 'data/sharp.json'), { events: {} }), out = {};
+  const byCode = new Map();
+  for (const r of rows) { const c = r.h.split(':')[0]; if (!byCode.has(c)) byCode.set(c, []); byCode.get(c).push(r); }
+  const used = new Map(); // row id -> score, so the best-fitting event wins a row
+  for (const e of Object.values(store.events || {})) {
+    let best = null;
+    for (const r of byCode.get(e.code) || []) {
+      if (Math.abs(r.ts - e.ts) > 6 * 3600) continue;
+      const sh = sim(e.home, r.hn), sa = sim(e.away, r.an), sc = sh + sa;
+      if (sh >= 0.3 && sa >= 0.3 && sc >= 1.0 && (!best || sc > best.sc)) best = { r, sc };
+    }
+    if (best && (!used.has(best.r.id) || used.get(best.r.id) < best.sc)) {
+      used.set(best.r.id, best.sc);
+      out[best.r.id] = { pin: e.last.pin, bfx: e.last.bfx, pin0: e.first.pin, at: e.last.at, at0: e.first.at };
+    }
+  }
+  return out;
+}
+
+module.exports = { load, LEAGUES, sim };
