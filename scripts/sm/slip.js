@@ -5,7 +5,7 @@
 // move = how far that chance has moved since we first saw the match (money coming in or out).
 //
 // Daily slip (three markets only): home/away win (no draw), over 2.5 goals, and over 1.5 goals in
-// the 1st half. Per day up to 4 picks in each of the three markets, one per match,
+// the 1st half. Per day up to 4 picks in each of the three markets, one pick per match (ever),
 // kick-off within 36 h, odds 1.40–5.00, edge >= 2% against Pinnacle or >= 4% against the
 // consensus, 4+ bookmakers pricing it, the chance not moving against it by 3+ points, and not in
 // the famous leagues (they are still recorded as a yardstick). Late in the season the table
@@ -107,7 +107,8 @@ const isFamous = L => !!L && (/champions league|europa league|conference league/
   // --- the pick log ---------------------------------------------------------------------------
   const log = S.readJSON(S.p('picks.json'), { picks: [] });
   const have = new Set(log.picks.map(x => x.id));
-  const usedFixtures = new Set(log.picks.filter(x => x.day === today).map(x => x.fid));
+  // One pick per match, ever: a match seen again on a later day (or the other side of it) is skipped.
+  const usedFixtures = new Set(log.picks.map(x => x.fid));
   const count = {};
   for (const x of log.picks) if (x.day === today) count[x.grp] = (count[x.grp] || 0) + 1;
   const ok = x => x.live && x.grp && !x.block && !(CFG.skipFamous && x.famous)
