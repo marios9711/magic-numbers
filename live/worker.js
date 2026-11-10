@@ -15,6 +15,7 @@
 //   TG_TOKEN       Telegram bot token (from @BotFather)      — optional; without it nothing is sent
 //   TG_CHAT        Telegram chat id to send to              — optional
 // HTTP:  GET /log  -> last 500 triggers as JSON (the GitHub job copies it into the repo daily)
+//        GET /test  -> one Telegram test message (at most every 10 minutes)
 //        GET /      -> short status
 
 const BASE = 'https://api.sportmonks.com/v3';
@@ -216,6 +217,13 @@ export default {
     try {
       await setup(env);
       if (url.pathname === '/log') return new Response(JSON.stringify(await summary(env)), { headers });
+      if (url.pathname === '/test') { // sends one Telegram test message (at most every 10 minutes)
+        const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'test'").first();
+        if (t && Date.now() - Number(t.v) < 600e3) return new Response(JSON.stringify({ ok: false, error: 'test already sent in the last 10 minutes' }), { headers });
+        await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('test', ?)").bind(String(Date.now())).run();
+        const sent = await telegram(env, '✅ <b>Magic Numbers</b> live logger is connected. Live alerts and the daily slip will arrive here.').catch(() => false);
+        return new Response(JSON.stringify({ ok: true, sent, sportmonksKey: !!env.SPORTMONKS_KEY, telegram: !!(env.TG_TOKEN && env.TG_CHAT) }), { headers });
+      }
       const last = await env.DB.prepare("SELECT v FROM meta WHERE k = 'last'").first();
       return new Response(JSON.stringify({ ok: true, last: last ? JSON.parse(last.v) : null }), { headers });
     } catch (e) { return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers }); }
