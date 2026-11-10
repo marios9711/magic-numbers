@@ -30,6 +30,7 @@ input[type=search]{flex:1;min-width:160px}
 .b{font-size:12px;padding:2px 7px;border-radius:999px;background:var(--chip);white-space:nowrap;display:inline-block}
 .b.ok{background:var(--win);color:#fff}.b.no{background:var(--loss);color:#fff}.b.push{background:var(--draw);color:#fff}
 .up{color:var(--win)}.down{color:var(--loss)}
+.mot{font-size:12px;color:var(--draw);margin-top:2px}.b.fam{background:var(--chip);color:var(--mute)}
 .tw{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:7px 6px;border-top:1px solid var(--line);vertical-align:top}th{color:var(--mute);font-weight:500;font-size:12px}
@@ -58,7 +59,7 @@ td small{color:var(--mute)}
 <main>
   <section id="slip"></section>
   <section id="value" class="hide">
-    <div class="toolbar"><input type="search" id="q" placeholder="Team or league"><select id="mk"><option value="">All markets</option><option>1X2</option><option>DC</option><option>BTTS</option><option>OU</option><option>AH</option></select><select id="ref"><option value="">Any reference</option><option value="pin">Pinnacle only</option></select></div>
+    <div class="toolbar"><input type="search" id="q" placeholder="Team or league"><select id="mk"><option value="">All three markets</option><option value="win">Win (home or away)</option><option value="over25">Over 2.5 goals</option><option value="ht15">Over 1.5 goals, 1st half</option></select><select id="fam"><option value="">All leagues</option><option value="less">Lesser-known only</option></select><select id="ref"><option value="">Any reference</option><option value="pin">Pinnacle only</option></select></div>
     <div class="card tw"><table id="vt"></table></div>
   </section>
   <section id="movers" class="hide"><div class="card tw"><p class="note">Selections whose margin-free chance has risen by 3+ points since we first saw the match — money coming in. Price shown: first best price → best price now.</p><table id="mt"></table></div></section>
@@ -86,8 +87,9 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 function pickCard(p) {
   return `<div class="pk"><div><div class="what">${esc(p.pick)}</div><div class="m">${esc(p.hn)} – ${esc(p.an)} · ${esc(p.lg)} · ${when(p.ts)}</div></div>
   <div class="odds">${p.odds.toFixed(2)}<div class="m">${esc(p.book)}</div></div>
-  <div class="why">Chance ${pct(p.fair0)} (${refName(p.ref)}) · edge ${sgn(p.edge0)} · moved ${pts(p.move0)} pts since first seen · model ${pct(p.model)} · ${p.n} bookmakers
-  ${p.clv != null ? ` · <b>later price: ${sgn(p.clv)}</b>` : ''} ${res(p)} ${p.profit != null ? eur(p.profit) : ''}</div></div>`;
+  <div class="why">Chance ${pct(p.fair0)} (${refName(p.ref)})${p.boost ? ` + ${(p.boost * 100).toFixed(0)} pts motivation` : ''} · edge ${sgn(p.edge0)} · moved ${pts(p.move0)} pts since first seen · model ${pct(p.model)} · ${p.n} bookmakers
+  ${p.clv != null ? ` · <b>later price: ${sgn(p.clv)}</b>` : ''} ${res(p)} ${p.profit != null ? eur(p.profit) : ''}
+  ${p.motText ? `<div class="mot">Table: ${esc(p.motText)}</div>` : ''}${(p.why || []).map(w => `<div class="mot">${esc(w)}</div>`).join('')}</div></div>`;
 }
 
 fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
@@ -104,20 +106,25 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
     <div class="card kpi"><div class="v">${P.settled ? pct(P.won / P.settled, 0) : '–'}</div><div class="l">won</div></div>
     <div class="card kpi"><div class="v">${eur(P.profit)}</div><div class="l">paper profit (€10 a pick) · return ${sgn(P.roi)}</div></div>
     <div class="card kpi"><div class="v">${P.clvPos == null ? '–' : pct(P.clvPos, 0)}</div><div class="l">beat the later price (${P.clvN} picks, avg ${sgn(P.clvAvg)})</div></div></div>`;
-  $('#slip').innerHTML = `<div class="card"><h2>Slip for ${esc(d.today)}</h2>${d.slip.length ? d.slip.map(pickCard).join('') :
-    '<div class="empty">No selection passes the rules yet today. The slip is filled at each run (07:07, 13:07, 18:07, 23:07) up to 5 picks; on quiet days it may stay empty — that is the point.</div>'}
-    <p class="note">Singles, not an accumulator. Each pick is logged the first time it appears and never changed.</p></div>${kpis}`;
+  const G = (d.settings && d.settings.groupNames) || { win: 'Win', over25: 'Over 2.5 goals', ht15: 'Over 1.5 goals, 1st half' };
+  const caps = (d.settings && d.settings.caps) || {};
+  $('#slip').innerHTML = `<div class="card"><h2>Slip for ${esc(d.today)}</h2>${Object.keys(G).map(g => {
+      const ps = d.slip.filter(p => p.grp === g);
+      return `<div class="lg note" style="margin-top:10px"><b>${esc(G[g])}</b> · up to ${caps[g] ?? '–'} a day</div>` + (ps.length ? ps.map(pickCard).join('') : '<div class="note" style="padding:6px 0">Nothing passes the rules yet today.</div>');
+    }).join('')}
+    <p class="note">Singles, not an accumulator. Filled at each run (07:07, 13:07, 18:07, 23:07). Each pick is logged the first time it appears and never changed. On quiet days some sections stay empty — that is the point.</p></div>${kpis}`;
 
-  const vrow = x => `<tr><td>${when(x.ts)}<br><small>${esc(x.lg)}</small></td><td>${esc(x.hn)} – ${esc(x.an)}<br><b>${esc(x.pick)}</b></td>
+  const vrow = x => `<tr><td>${when(x.ts)}<br><small>${esc(x.lg)}</small></td><td>${esc(x.hn)} – ${esc(x.an)}<br><b>${esc(x.pick)}</b>
+    ${x.famous ? ' <span class="b fam">famous league</span>' : ''}${x.motText ? `<div class="mot">${esc(x.motText)}${x.block ? ' · blocked by a motivation rule' : x.boost ? ` · +${(x.boost * 100).toFixed(0)} pts motivation` : ''}</div>` : ''}</td>
     <td class="n">${x.odds.toFixed(2)}<br><small>${esc(x.book)}</small></td><td class="n">${pct(x.fair)}<br><small>${refName(x.ref)}</small></td>
     <td class="n">${sgn(x.edge)}</td><td class="n hide-s">${pts(x.move)}</td><td class="n hide-s">${pct(x.model)}</td><td class="n hide-s">${x.n}</td></tr>`;
   const head = `<tr><th>Kick-off</th><th>Match / pick</th><th class="n">Best price</th><th class="n">Chance</th><th class="n">Edge</th><th class="n hide-s">Move</th><th class="n hide-s">Model</th><th class="n hide-s">Books</th></tr>`;
   const drawV = () => {
-    const q = $('#q').value.toLowerCase(), mk = $('#mk').value, rf = $('#ref').value;
-    const rows = d.value.filter(x => (!mk || x.mk === mk) && (!rf || x.ref === rf) && (!q || `${x.hn} ${x.an} ${x.lg}`.toLowerCase().includes(q)));
+    const q = $('#q').value.toLowerCase(), mk = $('#mk').value, rf = $('#ref').value, fam = $('#fam').value;
+    const rows = d.value.filter(x => (!mk || x.grp === mk) && (!rf || x.ref === rf) && (!fam || !x.famous) && (!q || `${x.hn} ${x.an} ${x.lg}`.toLowerCase().includes(q)));
     $('#vt').innerHTML = head + (rows.map(vrow).join('') || '<tr><td colspan="8" class="empty">Nothing priced above its fair chance right now.</td></tr>');
   };
-  ['#q', '#mk', '#ref'].forEach(id => $(id).oninput = drawV); drawV();
+  ['#q', '#mk', '#ref', '#fam'].forEach(id => $(id).oninput = drawV); drawV();
   $('#mt').innerHTML = `<tr><th>Kick-off</th><th>Match / selection</th><th class="n">Chance now</th><th class="n">Moved</th><th class="n">Price</th></tr>` +
     (d.movers.map(x => `<tr><td>${when(x.ts)}<br><small>${esc(x.lg)}</small></td><td>${esc(x.hn)} – ${esc(x.an)}<br><b>${esc(x.pick)}</b></td>
       <td class="n">${pct(x.fair)}<br><small>${refName(x.ref)}</small></td><td class="n">${pts(x.move)} pts</td><td class="n">${x.open.toFixed(2)} → ${x.odds.toFixed(2)}</td></tr>`).join('')
@@ -125,8 +132,9 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
 
   const byDay = {};
   for (const p of d.history) (byDay[p.day] = byDay[p.day] || []).push(p);
-  const mk = Object.entries(P.byMarket).map(([m, v]) => `${m}: ${v.n} bets, ${eur(v.profit)}`).join(' · ');
-  $('#past').innerHTML = `<div class="card note">By market — ${mk}</div>` + (Object.entries(byDay).map(([day, ps]) => `<div class="card"><h2>${esc(day)}</h2>${ps.map(pickCard).join('')}</div>`).join('')
+  const mk = Object.entries(P.byMarket).map(([m, v]) => `${esc(m)}: ${v.n} settled, ${v.won ?? '–'} won, ${eur(v.profit)}`).join(' · ');
+  const br = Object.entries(P.byRule || {}).map(([m, v]) => `${esc(m)}: ${v.n} settled, ${eur(v.profit)}, beat later price ${v.clvPos == null ? '–' : pct(v.clvPos, 0)} of ${v.clvN}`).join(' · ');
+  $('#past').innerHTML = `<div class="card note">By market — ${mk}<br>Motivation — ${br}</div>` + (Object.entries(byDay).map(([day, ps]) => `<div class="card"><h2>${esc(day)}</h2>${ps.map(pickCard).join('')}</div>`).join('')
     || '<div class="card empty">No earlier slips yet.</div>');
 
   const M = d.modelCheck;
@@ -141,12 +149,14 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
 });
 
 function howText(c) {
-  c = c || { perDay: 5, windowH: 36, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04, minBooks: 5, maxAgainst: 0.03, markets: ['1X2', 'DC', 'BTTS', 'OU'] };
+  c = c || { caps: { win: 3, over25: 3, ht15: 2 }, windowH: 36, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04, minBooks: 4, maxAgainst: 0.03 };
   $('#howc').innerHTML = `<h2>How it works</h2>
-  <p>No theory about form. Four times a day the site records every bookmaker's prices for every upcoming match (next 7 days) in all leagues of the Sportmonks plan, for 1X2, double chance, both teams to score, goals over/under on every line, and Asian handicap.</p>
+  <p><b>Three markets:</b> a home or away win (never the draw), over 2.5 goals, and over 1.5 goals in the first half. The focus is the lesser-known leagues, where fewer people look and bookmakers put less work into their prices; the famous leagues are still recorded as a yardstick but kept off the slip.</p>
+  <p>Four times a day the site records every bookmaker's prices for every upcoming match (next 7 days) in all leagues of the Sportmonks plan, so we can see how prices move through the week.</p>
   <p><b>Chance.</b> Each bookmaker's margin is removed (power method). Pinnacle's margin-free chance is the reference when Pinnacle prices the match; otherwise the median of all bookmakers. In our 2022–24 tests, Pinnacle's price was the best predictor we had, and beating it was the only rule that made money.</p>
   <p><b>Edge</b> = best price × chance − 1 (exchanges left out; a price more than 15% above the median is treated as an error). <b>Move</b> = how far the chance has changed since we first saw the match, in percentage points: money coming in (+) or going out (−).</p>
-  <p><b>The slip</b>: up to ${c.perDay} singles a day, one per match, kick-off within ${c.windowH} h, odds ${c.minOdds}–${c.maxOdds}, edge at least ${pct(c.minEdgePin, 0)} against Pinnacle or ${pct(c.minEdgeCons, 0)} against the consensus, priced by ${c.minBooks}+ bookmakers, and the chance not moving against it by ${(c.maxAgainst * 100).toFixed(0)}+ points. Markets: ${c.markets.join(', ')} (Asian handicap is recorded but kept off the slip until its data has been checked).</p>
+  <p><b>The slip</b>: per day up to ${c.caps ? `${c.caps.win} win, ${c.caps.over25} over-2.5 and ${c.caps.ht15} first-half picks` : 'a handful of picks'}, one per match, kick-off within ${c.windowH} h, odds ${c.minOdds}–${c.maxOdds}, edge at least ${pct(c.minEdgePin, 0)} against Pinnacle or ${pct(c.minEdgeCons, 0)} against the consensus, priced by ${c.minBooks}+ bookmakers, and the chance not moving against it by ${(c.maxAgainst * 100).toFixed(0)}+ points.</p>
+  <p><b>Beyond the teams: motivation.</b> In the last 10 games of a season the table is read for each side: in the title/promotion race, fighting relegation, nothing left to play for, or mid-table (approximate: split seasons and play-offs are not modelled). We tested this on 35,000 matches with Pinnacle's closing prices (30 leagues, 2022–25). Two situations stood out: an away side still playing for something against a home side with nothing left (won 38.1% vs 33.1% priced; ahead in all four seasons), and two sides with nothing to play for (over 2.5 hit 61.5% vs 57.1% priced; ahead in three of four). These add a little to the market's chance (3 and 2 points). Two other situations block a pick: backing a home side with nothing left against a motivated visitor, and over 2.5 when both sides are under pressure. The rules were fixed before going live and are judged separately on the Past picks tab.</p>
   <p><b>How to judge it.</b> Wins and losses over a few weeks are mostly luck. The fast honest test is whether the price we took beats the later price (odds taken × later chance − 1 above zero) over 100+ picks. If it doesn't, no amount of winning streaks makes it real.</p>
   <p class="note">Paper betting only; no real bets are placed. Odds from Sportmonks; results are 90-minute scores.</p>`;
 }
