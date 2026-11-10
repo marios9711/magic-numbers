@@ -4,22 +4,36 @@
 // (else the median of all bookmakers' margin-free chances), edge = best price x chance - 1,
 // move = how far that chance has moved since we first saw the match (money coming in or out).
 //
-// Daily slip: up to 5 singles a day (one per match), kick-off within 36 h, odds 1.40–5.00,
-// edge >= 2% against Pinnacle or >= 4% against the consensus, 5+ bookmakers pricing it, and the
-// sharp chance not moving against it by 3+ points. Picks are logged the first time they appear
-// and never changed afterwards; later runs only fill the day up to 5.
+// Daily slip (three markets only): home/away win (no draw), over 2.5 goals, and over 1.5 goals in
+// the 1st half. Per day up to 3 win picks, 3 over-2.5 picks and 2 first-half picks, one per match,
+// kick-off within 36 h, odds 1.40–5.00, edge >= 2% against Pinnacle or >= 4% against the
+// consensus, 4+ bookmakers pricing it, the chance not moving against it by 3+ points, and not in
+// the famous leagues (they are still recorded as a yardstick). Late in the season the table
+// matters: motivation rules (scripts/sm/motivation.js) add to or block a selection.
+// Picks are logged the first time they appear and never changed afterwards.
 // Scored by: beating the later price (odds taken x later fair chance - 1) and paper profit at €10.
 const S = require('./smlib');
 const Model = require('./model');
+const Mot = require('./motivation');
 
 const CFG = {
-  perDay: 5, windowH: 36, minLeadMin: 30, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04,
-  minBooks: 5, maxAgainst: 0.03, markets: ['1X2', 'DC', 'BTTS', 'OU'], // Asian handicap after a check of real data
+  keys: { 1: 'win', 2: 'win', 'O2.5': 'over25', 'HO1.5': 'ht15' },
+  caps: { win: 3, over25: 3, ht15: 2 },
+  windowH: 36, minLeadMin: 30, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04,
+  minBooks: 4, maxAgainst: 0.03, skipFamous: true,
   stake: 10, tz: 'Europe/Bucharest',
 };
 const localDay = ts => new Date(ts * 1000).toLocaleDateString('sv-SE', { timeZone: CFG.tz });
 const last = a => (a && a.length ? a[a.length - 1] : null);
 const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
+const GROUP_NAME = { win: 'Win (home or away)', over25: 'Over 2.5 goals', ht15: 'Over 1.5 goals, 1st half' };
+// Famous leagues: recorded and shown, but kept off the slip (the focus is where fewer people look).
+const FAMOUS_LIST = [
+  ['england', 'premier league'], ['spain', 'la liga'], ['italy', 'serie a'], ['germany', 'bundesliga'],
+  ['france', 'ligue 1'], ['netherlands', 'eredivisie'], ['portugal', 'liga portugal'], ['portugal', 'primeira liga'],
+];
+const isFamous = L => !!L && (/champions league|europa league|conference league/i.test(L.name || '')
+  || FAMOUS_LIST.some(([c, n]) => (L.country || '').toLowerCase() === c && (L.name || '').toLowerCase() === n));
 
 (async () => {
   if (!S.needKey('slip.js')) return;
@@ -43,12 +57,18 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
   const leaguesUsed = new Set(recs.map(r => r.lg));
   const seasonsByLeague = {};
   for (const [sid, lg] of Object.entries(st.seasonLeague)) (seasonsByLeague[lg] = seasonsByLeague[lg] || []).push(sid);
-  const result = {}, rowsByLeague = {};
+  const result = {}, rowsByLeague = {}, stand = {};
   for (const lg of leaguesUsed) {
-    const rows = [];
-    for (const sid of seasonsByLeague[lg] || []) rows.push(...S.readJSON(S.p(`seasons/${sid}.json`), { m: [] }).m);
+    const rows = [], bySeason = {};
+    for (const sid of seasonsByLeague[lg] || []) { bySeason[sid] = S.readJSON(S.p(`seasons/${sid}.json`), { m: [] }).m; rows.push(...bySeason[sid]); }
     rowsByLeague[lg] = rows;
-    for (const r of rows) result[r[0]] = [r[4], r[5]];
+    for (const r of rows) result[r[0]] = [r[4], r[5], r[6], r[7]];
+    // Motivation: the league's current season (and the previous one for the season length).
+    const L = st.leagues[lg];
+    const isCup = L && (/cup/i.test(L.type || '') || /cup|pokal|coppa|copa|coupe|taça|beker/i.test(L.name || ''));
+    if (L && !isCup && L.seasons && L.seasons.length) {
+      stand[lg] = Mot.standings(bySeason[L.seasons[0]] || [], bySeason[L.seasons[1]] || [], nowS);
+    }
   }
   const fits = {};
   const modelFor = rec => {
@@ -60,6 +80,7 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
   const sel = [];
   for (const rec of recs) {
     const lastSnap = last(rec.snaps);
+    const sd = stand[rec.lg], th = sd ? sd.stateOf(String(rec.h)) : 'early', ta = sd ? sd.stateOf(String(rec.a)) : 'early';
     let mx;
     for (const [key, o] of Object.entries(rec.o || {})) {
       const b = last(o.b);
@@ -70,10 +91,14 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
       if (!fair) continue;
       if (mx === undefined) mx = modelFor(rec);
       const firstB = o.b[0];
+      const rules = CFG.keys[key] ? Mot.rulesFor(th, ta, key) : [];
+      const boost = rules.reduce((s, r) => s + (r.boost || 0), 0);
       sel.push({
-        fid: rec.id, lg: rec.lg, ts: rec.ts, hn: rec.hn, an: rec.an, key, mk: S.marketOf(key),
+        fid: rec.id, lg: rec.lg, ts: rec.ts, hn: rec.hn, an: rec.an, key, mk: S.marketOf(key), grp: CFG.keys[key] || null,
         odds: b[1], book: books[b[2]] || `#${b[2]}`, ref: pinNow ? 'pin' : 'cons', fair,
-        edge: b[1] * fair - 1, move: fair - series[0][1], open: firstB[1], n: o.n,
+        edge: b[1] * (fair + boost) - 1, edgeMkt: b[1] * fair - 1, boost, block: rules.some(r => r.block),
+        rules: rules.map(r => r.id), mot: [th, ta], famous: isFamous(st.leagues[rec.lg]),
+        move: fair - series[0][1], open: firstB[1], n: o.n,
         live: o.at === lastSnap, model: Model.prob(mx, key), pin: last(o.pf) && o.pfAt === lastSnap ? last(o.pf)[1] : null,
       });
     }
@@ -83,20 +108,23 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
   const log = S.readJSON(S.p('picks.json'), { picks: [] });
   const have = new Set(log.picks.map(x => x.id));
   const usedFixtures = new Set(log.picks.filter(x => x.day === today).map(x => x.fid));
-  let todayCount = log.picks.filter(x => x.day === today).length;
-  const ok = x => x.live && CFG.markets.includes(x.mk) && x.ts > nowS + CFG.minLeadMin * 60 && x.ts < nowS + CFG.windowH * 3600
+  const count = {};
+  for (const x of log.picks) if (x.day === today) count[x.grp] = (count[x.grp] || 0) + 1;
+  const ok = x => x.live && x.grp && !x.block && !(CFG.skipFamous && x.famous)
+    && x.ts > nowS + CFG.minLeadMin * 60 && x.ts < nowS + CFG.windowH * 3600
     && x.odds >= CFG.minOdds && x.odds <= CFG.maxOdds && x.n >= CFG.minBooks
     && x.edge >= (x.ref === 'pin' ? CFG.minEdgePin : CFG.minEdgeCons) && x.move > -CFG.maxAgainst;
   const cands = sel.filter(ok).sort((a, b) => b.edge - a.edge);
   for (const c of cands) {
-    if (todayCount >= CFG.perDay) break;
+    if ((count[c.grp] || 0) >= CFG.caps[c.grp]) continue;
     const id = `${c.fid}:${c.key}`;
     if (have.has(id) || usedFixtures.has(c.fid)) continue;
     log.picks.push({
-      id, day: today, at: nowS, fid: c.fid, lg: c.lg, ts: c.ts, hn: c.hn, an: c.an, key: c.key, mk: c.mk,
-      odds: c.odds, book: c.book, ref: c.ref, fair0: r3(c.fair), edge0: r3(c.edge), move0: r3(c.move), model: r3(c.model), n: c.n,
+      id, day: today, at: nowS, fid: c.fid, lg: c.lg, ts: c.ts, hn: c.hn, an: c.an, key: c.key, mk: c.mk, grp: c.grp,
+      odds: c.odds, book: c.book, ref: c.ref, fair0: r3(c.fair), edge0: r3(c.edge), edgeMkt: r3(c.edgeMkt), boost: c.boost || undefined,
+      rules: c.rules.length ? c.rules : undefined, mot: c.mot, move0: r3(c.move), model: r3(c.model), n: c.n,
     });
-    have.add(id); usedFixtures.add(c.fid); todayCount++;
+    have.add(id); usedFixtures.add(c.fid); count[c.grp] = (count[c.grp] || 0) + 1;
   }
   // Later price (until kick-off) and result.
   const byId = new Map(sel.map(x => [`${x.fid}:${x.key}`, x]));
@@ -109,9 +137,12 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
     }
     const res = result[pk.fid];
     if (res && pk.r == null) {
-      pk.score = `${res[0]}-${res[1]}`;
-      pk.r = S.settle(pk.key, res[0], res[1]);
-      pk.profit = Math.round(S.payoff(pk.r, pk.odds) * CFG.stake * 100) / 100;
+      const r = S.settle(pk.key, res[0], res[1], res[2], res[3]);
+      if (r != null) { // a 1st-half pick waits until the half-time score is known
+        pk.score = `${res[0]}-${res[1]}` + (res[2] != null ? ` (HT ${res[2]}-${res[3]})` : '');
+        pk.r = r;
+        pk.profit = Math.round(S.payoff(pk.r, pk.odds) * CFG.stake * 100) / 100;
+      }
     }
   }
   log.picks = log.picks.filter(x => x.ts > nowS - 180 * 86400);
@@ -147,15 +178,19 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
 
   // --- page data ------------------------------------------------------------------------------
   const lgName = id => { const L = st.leagues[id]; return L ? `${L.country ? L.country + ' – ' : ''}${L.name}` : `League ${id}`; };
+  const motText = m => (m && (m[0] !== 'early' || m[1] !== 'early'))
+    ? [m[0] !== 'early' && `home ${Mot.words[m[0]]}`, m[1] !== 'early' && `away ${Mot.words[m[1]]}`].filter(Boolean).join(', ') : null;
+  const ruleText = ids => (ids || []).map(id => (Mot.RULES.find(r => r.id === id) || {}).text).filter(Boolean);
   const view = x => ({
-    fid: x.fid, lg: lgName(x.lg), ts: x.ts, hn: x.hn, an: x.an, key: x.key, mk: x.mk, pick: S.label(x.key, x.hn, x.an),
-    odds: x.odds, book: x.book, ref: x.ref, fair: r3(x.fair), edge: r3(x.edge), move: r3(x.move), open: x.open, n: x.n, model: r3(x.model),
+    fid: x.fid, lg: lgName(x.lg), ts: x.ts, hn: x.hn, an: x.an, key: x.key, mk: x.mk, grp: x.grp, pick: S.label(x.key, x.hn, x.an),
+    odds: x.odds, book: x.book, ref: x.ref, fair: r3(x.fair), edge: r3(x.edge), boost: x.boost || 0, move: r3(x.move), open: x.open,
+    n: x.n, model: r3(x.model), famous: x.famous, motText: motText(x.mot), why: ruleText(x.rules), block: x.block,
   });
-  const pickView = pk => ({ ...pk, lg: lgName(pk.lg), pick: S.label(pk.key, pk.hn, pk.an) });
-  const upcomingSel = sel.filter(x => x.live && x.ts > nowS);
-  const value = upcomingSel.filter(x => x.edge > 0 && x.odds >= 1.2 && x.odds <= 10 && x.n >= 4)
-    .sort((a, b) => b.edge - a.edge).slice(0, 120).map(view);
-  const movers = upcomingSel.filter(x => x.move >= 0.03 && x.mk !== 'DC')
+  const pickView = pk => ({ ...pk, lg: lgName(pk.lg), pick: S.label(pk.key, pk.hn, pk.an), motText: motText(pk.mot), why: ruleText(pk.rules) });
+  const upcomingSel = sel.filter(x => x.live && x.ts > nowS && x.grp);
+  const value = upcomingSel.filter(x => x.edge > 0 && x.odds >= 1.2 && x.odds <= 10 && x.n >= 3)
+    .sort((a, b) => b.edge - a.edge).slice(0, 150).map(view);
+  const movers = upcomingSel.filter(x => x.move >= 0.03)
     .sort((a, b) => b.move - a.move).slice(0, 40).map(view);
   const settled = log.picks.filter(x => x.r != null), withClv = log.picks.filter(x => x.clv != null);
   const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
@@ -165,9 +200,14 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
     roi: settled.length ? r3(sum(settled, x => x.profit) / (settled.length * CFG.stake)) : null,
     clvN: withClv.length, clvAvg: withClv.length ? r3(sum(withClv, x => x.clv) / withClv.length) : null,
     clvPos: withClv.length ? r3(withClv.filter(x => x.clv > 0).length / withClv.length) : null,
-    byMarket: Object.fromEntries(CFG.markets.map(m => {
-      const s = settled.filter(x => x.mk === m);
-      return [m, { n: s.length, profit: Math.round(sum(s, x => x.profit) * 100) / 100 }];
+    byMarket: Object.fromEntries(Object.keys(CFG.caps).map(g => {
+      const s = settled.filter(x => x.grp === g);
+      return [GROUP_NAME[g], { n: s.length, won: s.filter(x => x.r > 0).length, profit: Math.round(sum(s, x => x.profit) * 100) / 100 }];
+    })),
+    byRule: Object.fromEntries([['with a motivation rule', x => x.rules], ['no motivation rule', x => !x.rules]].map(([name, f]) => {
+      const s = settled.filter(f), c = withClv.filter(f);
+      return [name, { n: s.length, profit: Math.round(sum(s, x => x.profit) * 100) / 100, clvN: c.length,
+        clvPos: c.length ? r3(c.filter(x => x.clv > 0).length / c.length) : null }];
     })),
   };
   const fixturesTracked = recs.filter(r => r.ts > nowS).length;
@@ -175,7 +215,7 @@ const r3 = x => (x == null ? null : Math.round(x * 1000) / 1000);
     at: new Date(Date.now()).toISOString(), today,
     slip: log.picks.filter(x => x.day === today).map(pickView),
     history: log.picks.filter(x => x.day !== today).sort((a, b) => b.at - a.at).slice(0, 150).map(pickView),
-    value, movers, perf, modelCheck, settings: CFG,
+    value, movers, perf, modelCheck, settings: { ...CFG, groupNames: GROUP_NAME }, rules: Mot.RULES.map(r => ({ id: r.id, key: r.key, boost: r.boost, block: !!r.block, text: r.text })),
     status: {
       leagues: Object.keys(st.leagues).length, seasonsLeft: Object.values(st.hist).filter(h => !h.done).length,
       seasons: Object.keys(st.hist).length, fixturesTracked, selections: upcomingSel.length,

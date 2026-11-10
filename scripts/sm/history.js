@@ -44,7 +44,11 @@ const KEEP_SPARE = 250;           // leave this many Fixture calls for results.j
         BTTS: find(/^both teams to score$/i, 14),
         OU: find(/^goals over\/under$/i, 80),
         AH: find(/^asian handicap$/i, null),
+        // 1st-half total goals (not team totals, not exact/odd-even): name varies by feed
+        HOU: (mk.find(m => /(1st|first) half/i.test(m.name || '') && /goal|over\/under/i.test(m.name || '')
+          && !/team|home|away|exact|odd|even|both|corner|card|result|handicap|draw|winner|margin|range/i.test(m.name || '')) || { id: null }).id,
       };
+      log.hou = st.markets.HOU && (mk.find(m => m.id === st.markets.HOU) || {}).name;
       st.metaAt = new Date(Date.now()).toISOString();
       log.books = Object.keys(st.books).length; log.markets = st.markets;
     } catch (e) { log.metaError = e.message; }

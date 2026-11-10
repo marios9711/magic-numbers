@@ -3,6 +3,8 @@
 // results (recent games count more: half weight after 180 days), plus home and away scoring
 // averages. Expected goals: home = homeAvg x attack(home) x defence(away), and the same for away.
 // Scores follow a Poisson distribution with a small Dixon–Coles correction for 0-0/1-0/0-1/1-1.
+// 1st-half goals: the same expected goals scaled by the league's share of goals scored before
+// half-time (from half-time scores; about 0.44 if unknown).
 // It is NOT used to choose picks until it proves itself (see the model check on the slip page).
 const { settle } = require('./smlib');
 
@@ -34,7 +36,10 @@ function fit(rows, asOf) {
     ma /= teams.size; md /= teams.size;
     for (const t of teams) { att[t] /= ma; def[t] /= md; }
   }
-  return { baseH, baseA, att, def, games };
+  const ht = use.filter(r => r[6] != null && r[7] != null);
+  const ftG = ht.reduce((s, r) => s + r[4] + r[5], 0), htG = ht.reduce((s, r) => s + r[6] + r[7], 0);
+  const htShare = ht.length >= 60 && ftG > 0 ? htG / ftG : 0.44;
+  return { baseH, baseA, att, def, games, htShare };
 }
 
 function matrix(m, h, a) {
@@ -56,7 +61,9 @@ function matrix(m, h, a) {
     }
   }
   for (const row of M) for (let j = 0; j <= MAXG; j++) row[j] /= s;
-  return { M, xg: [lh, la] };
+  const hh = pois(lh * m.htShare), ha = pois(la * m.htShare);
+  const HT = hh.map(x => ha.map(y => x * y));
+  return { M, HT, xg: [lh, la] };
 }
 
 // Chance for any selection key, made comparable with a market's margin-free chance:
@@ -64,10 +71,11 @@ function matrix(m, h, a) {
 function prob(mx, key) {
   if (!mx) return null;
   let A = 0, B = 0;
+  const half = /^H[OU]/.test(key), P = half ? mx.HT : mx.M;
   for (let i = 0; i <= MAXG; i++) for (let j = 0; j <= MAXG; j++) {
-    const r = settle(key, i, j);
+    const r = half ? settle(key, 0, 0, i, j) : settle(key, i, j);
     if (r == null) return null;
-    if (r > 0) A += mx.M[i][j] * r; else if (r < 0) B += mx.M[i][j] * -r;
+    if (r > 0) A += P[i][j] * r; else if (r < 0) B += P[i][j] * -r;
   }
   return A + B > 0 ? A / (A + B) : null;
 }

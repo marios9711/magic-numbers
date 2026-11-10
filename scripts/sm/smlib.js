@@ -82,23 +82,27 @@ function compactFixture(f) {
   const home = parts.find(x => x.meta && x.meta.location === 'home') || parts[0] || {};
   const away = parts.find(x => x.meta && x.meta.location === 'away') || parts[1] || {};
   const st = f.state ? (f.state.developer_name || f.state.state || f.state.short_name) : String(f.state_id || '');
-  let hg = null, ag = null;
+  let hg = null, ag = null, hth = null, hta = null;
   const sc = f.scores || [];
-  for (const desc of ['2ND_HALF', 'CURRENT']) {
+  const pair = desc => {
     const rows = sc.filter(s => s.description === desc && s.score);
     const h = rows.find(s => s.score.participant === 'home'), a = rows.find(s => s.score.participant === 'away');
-    if (h && a) { hg = h.score.goals; ag = a.score.goals; break; }
-  }
+    return h && a ? [h.score.goals, a.score.goals] : null;
+  };
+  const ft = pair('2ND_HALF') || pair('CURRENT'), ht = pair('1ST_HALF');
+  if (ft) [hg, ag] = ft;
+  if (ht) [hth, hta] = ht;
   return {
     id: f.id, lg: f.league_id, sid: f.season_id,
     ts: f.starting_at_timestamp || Math.floor(Date.parse((f.starting_at || '').replace(' ', 'T') + 'Z') / 1000),
     st, h: home.id, a: away.id, hn: home.name, an: away.name,
     hg: FINISHED.has(st) ? hg : null, ag: FINISHED.has(st) ? ag : null,
+    hth: FINISHED.has(st) ? hth : null, hta: FINISHED.has(st) ? hta : null,
     odds: f.has_odds == null ? null : !!f.has_odds,
   };
 }
 
-// Season files hold finished matches as rows [id, ts, homeId, awayId, hg, ag].
+// Season files hold finished matches as rows [id, ts, homeId, awayId, hg, ag, htHome, htAway].
 function addResults(fixtures, state) {
   const bySeason = {};
   for (const f of fixtures) {
@@ -112,7 +116,7 @@ function addResults(fixtures, state) {
     const s = readJSON(file, { sid: Number(sid), lg: list[0].lg, m: [] });
     const have = new Map(s.m.map((r, i) => [r[0], i]));
     for (const f of list) {
-      const row = [f.id, f.ts, f.h, f.a, f.hg, f.ag];
+      const row = [f.id, f.ts, f.h, f.a, f.hg, f.ag, f.hth, f.hta];
       if (have.has(f.id)) s.m[have.get(f.id)] = row; else { s.m.push(row); added++; }
       if (f.hn) teams[f.h] = f.hn; if (f.an) teams[f.a] = f.an;
     }
@@ -145,7 +149,8 @@ const fmtLine = x => (x > 0 ? '+' : '') + (Math.round(x * 100) / 100);
 
 // One Sportmonks odd row -> { key, group } or null.
 //   1X2: '1','X','2'   DC: 'DC1X','DC12','DCX2'   BTTS: 'BY','BN'
-//   Goals: 'O2.5','U2.5' (any line)   Asian handicap: 'AHH-0.5' / 'AHA+0.5' (line from that side's view)
+//   Goals: 'O2.5','U2.5' (any line)   1st-half goals: 'HO1.5','HU1.5'
+//   Asian handicap: 'AHH-0.5' / 'AHA+0.5' (line from that side's view)
 function keyOf(o, mk, homeName, awayName) {
   const lab = String(o.label || o.name || '').trim(), L = lab.toLowerCase();
   const isHome = L === '1' || L === 'home' || (homeName && L === homeName.toLowerCase());
@@ -162,11 +167,12 @@ function keyOf(o, mk, homeName, awayName) {
     const k = L === 'yes' ? 'BY' : L === 'no' ? 'BN' : null;
     return k && { key: k, group: 'BTTS' };
   }
-  if (mk === 'OU') {
+  if (mk === 'OU' || mk === 'HOU') {
     const t = num(o.total != null ? o.total : o.name);
     if (t == null || t < 0.5 || t > 5.5 || (t * 4) % 1 !== 0) return null;
     const k = L.startsWith('over') ? 'O' : L.startsWith('under') ? 'U' : null;
-    return k && { key: `${k}${t}`, group: `OU${t}` };
+    const pre = mk === 'HOU' ? 'H' : '';
+    return k && { key: `${pre}${k}${t}`, group: `${pre}OU${t}` };
   }
   if (mk === 'AH') {
     const h = num(o.handicap != null ? o.handicap : o.name);
@@ -179,7 +185,8 @@ function keyOf(o, mk, homeName, awayName) {
 }
 
 // Outcome of a selection for a final score: 1 win, 0.5 half win, 0 push, -0.5 half loss, -1 loss.
-function settle(key, hg, ag) {
+// 1st-half keys need the half-time score (hth, hta); without it they return null (ungraded).
+function settle(key, hg, ag, hth, hta) {
   const sgn = d => (d > 1e-9 ? 1 : d < -1e-9 ? -1 : 0);
   const line = (diff, t) => { // diff(t) = margin over line t; quarter lines split the stake
     if (Math.abs((t * 4) % 2) === 1) return (sgn(diff(t - 0.25)) + sgn(diff(t + 0.25))) / 2;
@@ -197,6 +204,11 @@ function settle(key, hg, ag) {
     case 'BN': return hg > 0 && ag > 0 ? -1 : 1;
   }
   let m;
+  if ((m = /^H([OU])([\d.]+)$/.exec(key))) {
+    if (hth == null || hta == null) return null;
+    const HT = hth + hta;
+    return m[1] === 'O' ? line(t => HT - t, Number(m[2])) : line(t => t - HT, Number(m[2]));
+  }
   if ((m = /^O(-?[\d.]+)$/.exec(key))) return line(t => T - t, Number(m[1]));
   if ((m = /^U(-?[\d.]+)$/.exec(key))) return line(t => t - T, Number(m[1]));
   if ((m = /^AHH([+-]?[\d.]+)$/.exec(key))) return line(t => hg - ag + t, Number(m[1]));
@@ -207,7 +219,7 @@ function settle(key, hg, ag) {
 const payoff = (r, P) => (r > 0 ? r * (P - 1) : r);
 
 const marketOf = key => key === '1' || key === 'X' || key === '2' ? '1X2' : key.startsWith('DC') ? 'DC'
-  : key === 'BY' || key === 'BN' ? 'BTTS' : key.startsWith('AH') ? 'AH' : 'OU';
+  : key === 'BY' || key === 'BN' ? 'BTTS' : key.startsWith('AH') ? 'AH' : /^H[OU]/.test(key) ? 'HOU' : 'OU';
 
 function label(key, hn, an) {
   if (key === '1') return `${hn} to win`;
@@ -219,6 +231,8 @@ function label(key, hn, an) {
   if (key === 'BY') return 'Both teams score';
   if (key === 'BN') return 'Not both teams score';
   let m;
+  if ((m = /^HO(.+)$/.exec(key))) return `Over ${m[1]} goals, 1st half`;
+  if ((m = /^HU(.+)$/.exec(key))) return `Under ${m[1]} goals, 1st half`;
   if ((m = /^O(.+)$/.exec(key))) return `Over ${m[1]} goals`;
   if ((m = /^U(.+)$/.exec(key))) return `Under ${m[1]} goals`;
   if ((m = /^AHH(.+)$/.exec(key))) return `${hn} ${m[1]} (Asian)`;
