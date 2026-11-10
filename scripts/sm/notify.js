@@ -7,7 +7,6 @@ const TOKEN = process.env.TG_TOKEN, CHAT = process.env.TG_CHAT;
 const NAMES = { win: 'Win', over25: 'Over 2.5', ht15: '1st-half over 1.5' };
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const time = ts => new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Europe/Bucharest', weekday: 'short', hour: '2-digit', minute: '2-digit' });
-const pct = x => (x == null ? '–' : `${(x * 100).toFixed(0)}%`);
 
 async function send(text) {
   const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
@@ -20,20 +19,20 @@ async function send(text) {
 (async () => {
   if (!TOKEN || !CHAT) { console.log('notify.js: TG_TOKEN / TG_CHAT not set — skipping.'); return; }
   const picks = S.readJSON(S.p('picks.json'), { picks: [] }).picks;
-  const st = S.loadState();
-  const lg = id => { const L = st.leagues[id]; return L ? `${L.country ? L.country + ' · ' : ''}${L.name}` : ''; };
   const done = S.readJSON(S.p('notified.json'), { picks: [], results: [] });
   const sentP = new Set(done.picks), sentR = new Set(done.results);
 
   const fresh = picks.filter(p => !sentP.has(p.id) && p.ts > S.now()).sort((a, b) => a.ts - b.ts);
   if (fresh.length) {
-    const lines = [`🧾 <b>Daily slip ${esc(fresh[0].day)}</b> — ${fresh.length} new pick${fresh.length > 1 ? 's' : ''} (singles, paper only)`];
+    const day = new Date(fresh[0].day + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    const lines = [`🧾 <b>Daily slip ${esc(day)}</b>`];
     for (const g of Object.keys(NAMES)) {
       const ps = fresh.filter(p => p.grp === g);
       if (!ps.length) continue;
       lines.push(`\n<b>${NAMES[g]}</b>`);
       for (const p of ps) {
-        lines.push(`• ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)} <i>(${esc(lg(p.lg))})</i>\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b> ${esc(p.book)} · chance ${pct(p.fair0)} · edge +${(p.edge0 * 100).toFixed(1)}%${p.rules ? ' · motivation' : ''}`);
+        // Short format (Marios's choice): match, pick and price only. Details stay on the site.
+        lines.push(`• ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`);
       }
     }
     await send(lines.join('\n'));
@@ -42,11 +41,11 @@ async function send(text) {
 
   const graded = picks.filter(p => p.r != null && !sentR.has(p.id));
   if (graded.length) {
-    const profit = graded.reduce((s, p) => s + (p.profit || 0), 0);
-    const all = picks.filter(p => p.r != null), tot = all.reduce((s, p) => s + (p.profit || 0), 0);
-    const lines = [`📊 <b>Results</b> — ${graded.filter(p => p.r > 0).length}/${graded.length} won, ${profit >= 0 ? '+' : '−'}€${Math.abs(profit).toFixed(2)} (€10 a pick)`];
-    for (const p of graded.slice(0, 25)) lines.push(`${p.r > 0 ? '✅' : p.r < 0 ? '❌' : '➖'} ${esc(p.hn)} – ${esc(p.an)} ${esc(p.score)} · ${esc(S.label(p.key, p.hn, p.an))} @ ${p.odds.toFixed(2)}`);
-    lines.push(`\nSo far: ${all.length} graded, ${all.length ? Math.round(all.filter(p => p.r > 0).length / all.length * 100) : 0}% won, ${tot >= 0 ? '+' : '−'}€${Math.abs(tot).toFixed(2)}`);
+    const lines = ['📊 <b>Results</b>'];
+    for (const p of graded.slice(0, 25)) {
+      const sc = p.grp === 'ht15' ? (String(p.score).match(/HT \d+-\d+/) || [p.score])[0] : String(p.score).split(' (')[0];
+      lines.push(`${p.r > 0 ? '✅' : p.r < 0 ? '❌' : '➖'} ${esc(p.hn)} – ${esc(p.an)}: ${esc(S.label(p.key, p.hn, p.an))} (${esc(sc)})`);
+    }
     await send(lines.join('\n'));
     for (const p of graded) sentR.add(p.id);
   }
