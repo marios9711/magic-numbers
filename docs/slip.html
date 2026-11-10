@@ -149,7 +149,7 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
 });
 
 function howText(c) {
-  c = c || { caps: { win: 3, over25: 3, ht15: 2 }, windowH: 36, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04, minBooks: 4, maxAgainst: 0.03 };
+  c = c || { caps: { win: 4, over25: 4, ht15: 4 }, windowH: 36, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04, minBooks: 4, maxAgainst: 0.03 };
   $('#howc').innerHTML = `<h2>How it works</h2>
   <p><b>Three markets:</b> a home or away win (never the draw), over 2.5 goals, and over 1.5 goals in the first half. The focus is the lesser-known leagues, where fewer people look and bookmakers put less work into their prices; the famous leagues are still recorded as a yardstick but kept off the slip.</p>
   <p>Four times a day the site records every bookmaker's prices for every upcoming match (next 7 days) in all leagues of the Sportmonks plan, so we can see how prices move through the week.</p>
