@@ -1,0 +1,63 @@
+name: Daily slip (Sportmonks)
+
+on:
+  schedule:
+    - cron: '7 5 * * *'    # 07:07 Cyprus/Bucharest time (winter) — the day's slip
+    - cron: '7 11 * * *'   # 13:07
+    - cron: '7 16 * * *'   # 18:07
+    - cron: '7 21 * * *'   # 23:07
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sm
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Check the Sportmonks key
+        id: key
+        env:
+          SPORTMONKS_KEY: ${{ secrets.SPORTMONKS_KEY }}
+        run: |
+          if [ -z "$SPORTMONKS_KEY" ]; then echo "on=no" >> "$GITHUB_OUTPUT"; echo "No SPORTMONKS_KEY secret yet — nothing to do."; else echo "on=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Leagues, bookmakers and past seasons (until all downloaded)
+        if: steps.key.outputs.on == 'yes'
+        timeout-minutes: 35
+        env:
+          SPORTMONKS_KEY: ${{ secrets.SPORTMONKS_KEY }}
+        run: node scripts/sm/history.js || echo "history.js failed — carries on next run"
+      - name: Results and upcoming fixtures
+        if: steps.key.outputs.on == 'yes'
+        env:
+          SPORTMONKS_KEY: ${{ secrets.SPORTMONKS_KEY }}
+        run: node scripts/sm/results.js
+      - name: Odds snapshot (all bookmakers, next 7 days)
+        if: steps.key.outputs.on == 'yes'
+        timeout-minutes: 15
+        env:
+          SPORTMONKS_KEY: ${{ secrets.SPORTMONKS_KEY }}
+        run: node scripts/sm/odds.js || echo "odds.js failed — slip uses the previous snapshot"
+      - name: Build the slip
+        if: steps.key.outputs.on == 'yes'
+        env:
+          SPORTMONKS_KEY: ${{ secrets.SPORTMONKS_KEY }}
+        run: node scripts/sm/slip.js
+      - name: Save
+        if: steps.key.outputs.on == 'yes'
+        run: |
+          git config user.name "magic-numbers-bot"
+          git config user.email "actions@users.noreply.github.com"
+          for d in data/sm docs/data/sm; do if [ -d "$d" ]; then git add "$d"; fi; done
+          git diff --cached --quiet || git commit -m "Daily slip update $(date -u +%F\ %H:%M)"
+          git pull --rebase
+          git push
