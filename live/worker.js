@@ -21,8 +21,8 @@
 
 const BASE = 'https://api.sportmonks.com/v3';
 const PATTERNS = {
-  P30: { name: '2-0 at 30\' → goal before HT', history: '40% of 238 matches', half: true },
-  P75: { name: 'two-goal lead at 70–78\' → another goal', history: '49% at 75\', 56% at 70\'', half: false },
+  P30: { name: '2-0 at 30\' → goal before HT', history: '40% of 238 matches', half: true, ask: 'Goal before half-time?', short: 'goal before half-time' },
+  P75: { name: 'two-goal lead at 70–78\' → another goal', history: '49% at 75\', 56% at 70\'', half: false, ask: 'Another goal?', short: 'another goal' },
 };
 const FINISHED = /^(FT|AET|FT_PEN|AWARDED)$/;
 const DEAD = /CANC|POSTP|ABAN|DELETED|SUSP|INTERRUPTED/;
@@ -138,14 +138,12 @@ async function scan(env) {
     const H = side(f, 'home').name, A = side(f, 'away').name, lg = f.league ? f.league.name : '';
     const sc = `${m.s[0]}-${m.s[1]}`;
     const be = best ? `break-even ${(100 / best.price).toFixed(0)}%` : 'no live price found';
+    // Short message (Marios's choice): match, score, minute, the question and the price. Everything
+    // else (bookmakers, history, stats) is still stored in the log and shown on the site.
     const text = [
-      `⚽ <b>${esc(lg)}</b> · ${esc(H)} ${sc} ${esc(A)} · ${m.c.minute}'`,
-      `Pattern: ${esc(P.name)}`,
-      best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b> ${esc(best.book)}${pin ? ` · Pinnacle ${pin.price.toFixed(2)}` : ''}${b365 ? ` · bet365 ${b365.price.toFixed(2)}` : ''}` : 'Live price: not available',
-      `History: ${esc(P.history)} · ${be}`,
-      st.corners || st.shots ? `Corners ${st.corners ? `${st.corners.home}-${st.corners.away}` : '–'} · shots ${st.shots ? `${st.shots.home}-${st.shots.away}` : '–'}${st.dangerous ? ` · dangerous attacks ${st.dangerous.home}-${st.dangerous.away}` : ''}` : '',
-      '<i>Logged for the test — paper only.</i>',
-    ].filter(Boolean).join('\n');
+      `⚽ ${esc(H)} ${sc} ${esc(A)} · ${m.c.minute}'`,
+      `${P.ask}${best ? ` Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : ''}`,
+    ].join('\n');
     const sent = await telegram(env, text).catch(() => false);
     await env.DB.prepare(`INSERT OR IGNORE INTO triggers (id, fid, pattern, at, minute, score, league, home, away, line, best, best_book, prices, stats, sent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -180,7 +178,7 @@ async function settle(env) {
     if (hit == null && (DEAD.test(state) || now - t.at > 4 * 3600)) { hit = -1; result = `void (${state || 'no result'})`; }
     if (hit == null) continue;
     await env.DB.prepare('UPDATE triggers SET hit = ?, result = ?, settled_at = ? WHERE id = ?').bind(hit, result, now, t.id).run();
-    if (hit >= 0) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(PATTERNS[t.pattern].name)} · ${esc(result)}${t.best ? ` · price was ${Number(t.best).toFixed(2)}` : ''}`).catch(() => {});
+    if (hit >= 0) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(PATTERNS[t.pattern].short)} (${esc(result)})`).catch(() => {});
     n++;
   }
   return n;
@@ -224,29 +222,24 @@ export default {
         await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('demo', ?)").bind(String(Date.now())).run();
         const msgs = [
           ['🧪 <b>EXAMPLE — not a real pick</b>', '',
-            '🧾 <b>Daily slip 2026-11-21</b> — 3 new picks (singles, paper only)', '',
+            '🧾 <b>Daily slip 21 Nov</b>', '',
             '<b>Win</b>',
-            '• Sat 15:00 Example Town – Sample City <i>(Norway · OBOS-ligaen)</i>',
-            '   Sample City to win @ <b>2.45</b> Unibet · chance 44% · edge +7.8% · motivation', '',
+            '• Sat 15:00 Example Town – Sample City',
+            '   Sample City to win @ <b>2.45</b>', '',
             '<b>Over 2.5</b>',
-            '• Sat 17:30 Demo United – Test Rovers <i>(Japan · J2 League)</i>',
-            '   Over 2.5 goals @ <b>2.10</b> bet365 · chance 51% · edge +7.1%', '',
+            '• Sat 17:30 Demo United – Test Rovers',
+            '   Over 2.5 goals @ <b>2.10</b>', '',
             '<b>1st-half over 1.5</b>',
-            '• Sun 13:00 Model Athletic – Placeholder FC <i>(Brazil · Série B)</i>',
-            '   Over 1.5 goals, 1st half @ <b>3.20</b> 1xBet · chance 33% · edge +5.6%'].join('\n'),
+            '• Sun 13:00 Model Athletic – Placeholder FC',
+            '   Over 1.5 goals, 1st half @ <b>3.20</b>'].join('\n'),
           ['🧪 <b>EXAMPLE — not a real alert</b>', '',
-            "⚽ <b>Korea K League 2</b> · Demo United 2-0 Test Rovers · 31'",
-            "Pattern: 2-0 at 30' → goal before HT",
-            'Over 2.5 (1st half) @ <b>2.30</b> bet365 · Pinnacle 2.18',
-            'History: 40% of 238 matches · break-even 43%',
-            'Corners 5-1 · shots 9-2 · dangerous attacks 38-12',
-            '<i>Logged for the test — paper only.</i>'].join('\n'),
-          ['🧪 <b>EXAMPLE</b>', '', "✅ Demo United – Test Rovers: 2-0 at 30' → goal before HT · HT 3-0 · price was 2.30", '',
-            '📊 <b>Results</b> — 2/3 won, +€15.50 (€10 a pick)',
-            '✅ Example Town – Sample City 0-1 (HT 0-0) · Sample City to win @ 2.45',
-            '✅ Demo United – Test Rovers 3-1 (HT 3-0) · Over 2.5 goals @ 2.10',
-            '❌ Model Athletic – Placeholder FC 1-1 (HT 0-1) · Over 1.5 goals, 1st half @ 3.20', '',
-            'So far: 3 graded, 67% won, +€15.50'].join('\n'),
+            "⚽ Demo United 2-0 Test Rovers · 31'",
+            'Goal before half-time? Over 2.5 (1st half) @ <b>2.30</b>'].join('\n'),
+          ['🧪 <b>EXAMPLE</b>', '', '✅ Demo United – Test Rovers: goal before half-time (HT 3-0)', '',
+            '📊 <b>Results</b>',
+            '✅ Example Town – Sample City: Sample City to win (0-1)',
+            '✅ Demo United – Test Rovers: Over 2.5 goals (3-1)',
+            '❌ Model Athletic – Placeholder FC: Over 1.5 goals, 1st half (HT 0-1)'].join('\n'),
         ];
         const sent = [];
         for (const m of msgs) sent.push(await telegram(env, m).catch(() => false));
