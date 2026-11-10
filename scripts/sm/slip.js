@@ -5,7 +5,7 @@
 // move = how far that chance has moved since we first saw the match (money coming in or out).
 //
 // Daily slip (three markets only): home/away win (no draw), over 2.5 goals, and over 1.5 goals in
-// the 1st half. Per day up to 3 win picks, 3 over-2.5 picks and 2 first-half picks, one per match,
+// the 1st half. Per day up to 4 picks in each of the three markets, one per match,
 // kick-off within 36 h, odds 1.40–5.00, edge >= 2% against Pinnacle or >= 4% against the
 // consensus, 4+ bookmakers pricing it, the chance not moving against it by 3+ points, and not in
 // the famous leagues (they are still recorded as a yardstick). Late in the season the table
@@ -18,7 +18,7 @@ const Mot = require('./motivation');
 
 const CFG = {
   keys: { 1: 'win', 2: 'win', 'O2.5': 'over25', 'HO1.5': 'ht15' },
-  caps: { win: 3, over25: 3, ht15: 2 },
+  caps: { win: 4, over25: 4, ht15: 4 },
   windowH: 36, minLeadMin: 30, minOdds: 1.4, maxOdds: 5, minEdgePin: 0.02, minEdgeCons: 0.04,
   minBooks: 4, maxAgainst: 0.03, skipFamous: true,
   stake: 10, tz: 'Europe/Bucharest',
