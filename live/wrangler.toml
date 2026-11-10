@@ -1,0 +1,17 @@
+# Cloudflare Worker config for the live pattern logger (deployed by Cloudflare Workers Builds
+# from this folder). Secrets (SPORTMONKS_KEY, TG_TOKEN, TG_CHAT) are set in the Cloudflare
+# dashboard and are kept across deploys; they are never stored here.
+name = "magic-numbers-live"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+account_id = "1138edf6c5ed88a08076a5f2f76f5bf8"
+workers_dev = true
+keep_vars = true
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "magic-numbers-live"
+database_id = "ea479f5a-98c3-4080-b58e-aba01143d477"
