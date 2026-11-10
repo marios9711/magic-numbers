@@ -142,7 +142,7 @@ async function scan(env) {
     // else (bookmakers, history, stats) is still stored in the log and shown on the site.
     const text = [
       `⚽ ${esc(H)} ${sc} ${esc(A)} · ${m.c.minute}'`,
-      `${P.ask}${best ? ` Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : ''}`,
+      best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : `Over ${line}${P.half ? ' (1st half)' : ''}`,
     ].join('\n');
     const sent = await telegram(env, text).catch(() => false);
     await env.DB.prepare(`INSERT OR IGNORE INTO triggers (id, fid, pattern, at, minute, score, league, home, away, line, best, best_book, prices, stats, sent)
@@ -234,7 +234,7 @@ export default {
             '   Over 1.5 goals, 1st half @ <b>3.20</b>'].join('\n'),
           ['🧪 <b>EXAMPLE — not a real alert</b>', '',
             "⚽ Demo United 2-0 Test Rovers · 31'",
-            'Goal before half-time? Over 2.5 (1st half) @ <b>2.30</b>'].join('\n'),
+            'Over 2.5 (1st half) @ <b>2.30</b>'].join('\n'),
           ['🧪 <b>EXAMPLE</b>', '', '✅ Demo United – Test Rovers: goal before half-time (HT 3-0)', '',
             '📊 <b>Results</b>',
             '✅ Example Town – Sample City: Sample City to win (0-1)',
