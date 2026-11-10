@@ -10,11 +10,12 @@
 //   P75   ALERT  2nd half 70'–78', two-goal lead, last two goals 5+ minutes apart -> another goal?
 //   P75c  quiet  same, last two goals < 5 minutes apart (or minutes unknown)   (history 49%)
 //   PEQ   ALERT  pre-match favourite v outsider; the outsider scores the first goal at 7'–12', the
-//                favourite equalises later (by 60'), still 1-1 -> another goal (over 2.5 goals).
-//                History (favourite = better season points, not odds): 26/30 (87%) any equaliser
-//                time; 95% when the equaliser comes before HT (wider window); other 1-1s 62–76%.
-//   PEQL  quiet  same, but the equaliser comes after 60' (few cases in history: 1/4)
-//   PEQW  quiet  wider: the outsider's first goal is in the first 20' but outside 7'–12' (87% of 101)
+//                favourite equalises by 30', still 1-1 -> another goal before HT (over 2.5 1st half).
+//                History (favourite = better season points, not odds): 10/13 (77%); any 1st-half
+//                equaliser 57% (12/21); equaliser after 30' 25% (2/8).
+//   PEQL  quiet  same, but the equaliser comes 31'–45'
+//   PEQW  quiet  wider: the outsider's first goal is in the first 20' but outside 7'–12', favourite
+//                equalises in the 1st half (wider history: 71% by 25', 38% after)
 // Favourite = pre-match margin-free win chance at least 20 points above the opponent's (median of
 // all bookmakers). Each trigger is stored once (D1 table `triggers`) and graded after the match
 // (90-minute score; first-half patterns from the half-time score). Logging only: no bets.
@@ -35,9 +36,9 @@ const PATTERNS = {
   P30c: { name: '2-0 at 30\', goals close together (logged only)', history: '41% (gap < 5\')', half: true, alert: false, short: 'goal before half-time' },
   P75: { name: 'two-goal lead at 70–78\', last goals 5+ min apart → another goal', history: '49% at 75\'', half: false, alert: true, short: 'another goal' },
   P75c: { name: 'two-goal lead at 70–78\', last goals close together (logged only)', history: '47% (gap < 5\')', half: false, alert: false, short: 'another goal' },
-  PEQ: { name: 'outsider scores 7–12\', favourite equalises (by 60\') → another goal', history: '87% (26/30)', half: false, alert: true, short: 'another goal' },
-  PEQL: { name: 'outsider scores 7–12\', favourite equalises after 60\' (logged only)', history: '1/4 (too few)', half: false, alert: false, short: 'another goal' },
-  PEQW: { name: 'outsider scores in first 20\' (not 7–12\'), favourite equalises (logged only)', history: '87% (88/101) incl. 7–12\'', half: false, alert: false, short: 'another goal' },
+  PEQ: { name: 'outsider scores 7–12\', favourite equalises by 30\' → goal before HT', history: '77% (10/13)', half: true, alert: true, short: 'goal before half-time' },
+  PEQL: { name: 'outsider scores 7–12\', favourite equalises 31–45\' (logged only)', history: '25% (2/8)', half: true, alert: false, short: 'goal before half-time' },
+  PEQW: { name: 'outsider scores in first 20\' (not 7–12\'), favourite equalises in 1st half (logged only)', history: '71% by 25\', 38% after', half: true, alert: false, short: 'goal before half-time' },
 };
 const MIN_GAP = 5;            // goals closer together than this (minutes) don't trigger an alert
 const FAV_MARGIN = 0.20;      // favourite: pre-match win chance at least this much above the other side's
@@ -98,10 +99,10 @@ function match(f) {
   }
   // Favourite equalises after the outsider scored first: picked up within 5 minutes of the equaliser,
   // so the live price is still the one right after it.
-  if ((c.period === 1 || c.period === 2) && h === 1 && a === 1 && tl) {
+  if (c.period === 1 && h === 1 && a === 1 && tl) {
     const [g1, g2] = tl;
     if (g1.side !== g2.side && c.minute >= Math.floor(g2.min) && c.minute - g2.min <= 5) {
-      if (g1.min >= 7 && g1.min < 13) return { key: g2.min < 61 ? 'PEQ' : 'PEQL', c, s, info, need: g2.side };
+      if (g1.min >= 7 && g1.min < 13) return { key: g2.min < 31 ? 'PEQ' : 'PEQL', c, s, info, need: g2.side };
       if (g1.min < 21) return { key: 'PEQW', c, s, info, need: g2.side };
     }
   }
