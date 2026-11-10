@@ -1,6 +1,7 @@
 // Magic Numbers — live pattern logger (Cloudflare Worker, cron every minute).
 //
-// Watches every live match in the Sportmonks plan and logs pre-set situations from Marios's
+// Watches every live match in the Sportmonks plan (checked 3 times a minute: every ~20 seconds) and
+// logs pre-set situations from Marios's
 // live-betting experience, with the live price at that moment, then the result. Only the ALERT
 // patterns (Marios's rules) go to Telegram; the others are logged quietly so the rules can be
 // compared with the situations they leave out. History = StatsBomb minute data, 2,759 matches.
@@ -190,15 +191,56 @@ async function bookNames(env) {
   return books;
 }
 
+// Could this live match be in one of the patterns? (score + minute only; cheap)
+function maybe(f) {
+  const c = clock(f), s = goals(f, 'CURRENT');
+  if (!c || !s) return false;
+  const tot = s[0] + s[1], lead = Math.abs(s[0] - s[1]);
+  return (c.period === 1 && c.minute >= 28 && c.minute <= 34 && tot === 2 && lead === 2)
+    || (c.period === 2 && c.minute >= 70 && c.minute <= 78 && lead === 2)
+    || (c.period === 1 && s[0] === 1 && s[1] === 1);
+}
+
+// Several D1 lookups in one query: returns a Set of the keys that exist (or a Map key -> value).
+async function inTable(env, table, col, keys, withValue) {
+  if (!keys.length) return withValue ? new Map() : new Set();
+  const rows = (await env.DB.prepare(`SELECT ${col}${withValue ? ', v' : ''} FROM ${table} WHERE ${col} IN (${keys.map(() => '?').join(',')})`).bind(...keys).all()).results || [];
+  return withValue ? new Map(rows.map(r => [r[col], r.v])) : new Set(rows.map(r => r[col]));
+}
+
+// One check of all live matches. To stay light (it runs 3 times a minute), the live list is fetched
+// with scores and clock only; team names, league and goal events are fetched only for matches that
+// could be in a pattern, once per score (cached in the meta table as tl:<fixture>:<score>).
 async function scan(env) {
   const now = Math.floor(Date.now() / 1000);
-  const j = await sm(env, '/football/livescores/inplay', { include: 'participants;scores;currentPeriod;league;events' });
-  const live = (j.data || []).map(f => ({ f, m: match(f) })).filter(x => x.m);
+  const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod' });
+  const pre = (j.data || []).filter(maybe);
+  const tkey = f => { const s = goals(f, 'CURRENT'); return `tl:${f.id}:${s[0]}-${s[1]}`; };
+  const cache = await inTable(env, 'meta', 'k', pre.map(tkey), true);
+  const live = [];
+  for (const f of pre) {
+    let d = cache.get(tkey(f)) && JSON.parse(cache.get(tkey(f)));
+    if (!d) {
+      try {
+        const x = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;events;league' })).data || {};
+        d = { at: now, participants: (x.participants || []).map(p => ({ id: p.id, name: p.name, meta: p.meta })),
+          events: (x.events || []).filter(e => [14, 15, 16].includes(e.type_id)).map(e => ({ type_id: e.type_id, minute: e.minute, extra_minute: e.extra_minute, result: e.result, participant_id: e.participant_id, rescinded: e.rescinded, sort_order: e.sort_order })),
+          league: x.league ? { name: x.league.name } : null };
+        await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(tkey(f), JSON.stringify(d)).run();
+      } catch { continue; }
+    }
+    const full = { ...f, participants: d.participants, events: d.events, league: d.league };
+    const m = match(full);
+    if (m) live.push({ f: full, m });
+  }
+  const ids = live.map(({ f, m }) => `${f.id}:${m.key}`);
+  const done = await inTable(env, 'triggers', 'id', ids);
+  const checked = await inTable(env, 'meta', 'k', ids.map(id => `checked:${id}`));
   let books = null, logged = 0, alerts = 0;
   for (const { f, m } of live) {
     const id = `${f.id}:${m.key}`;
-    if (await env.DB.prepare('SELECT 1 FROM triggers WHERE id = ?').bind(id).first()) continue;
-    if (m.need && await env.DB.prepare('SELECT 1 FROM meta WHERE k = ?').bind(`checked:${id}`).first()) continue;
+    if (done.has(id)) continue;
+    if (m.need && checked.has(`checked:${id}`)) continue;
     if (m.need) { // favourite-equalises patterns: the side that equalised must be the pre-match favourite
       let fv = { fav: null };
       try { fv = await favourite(env, f.id, env.MARKET_1X2 || 1); } catch { /* no pre-match odds */ }
@@ -234,7 +276,7 @@ async function scan(env) {
         JSON.stringify(prices.slice(0, 8)), JSON.stringify({ ...st, ...m.info }), sent ? 1 : 0).run();
     logged++;
   }
-  return { live: (j.data || []).length, candidates: live.length, logged, alerts };
+  return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts };
 }
 
 // Grade finished triggers (checked every 10 minutes).
@@ -268,11 +310,27 @@ async function settle(env) {
   return n;
 }
 
-async function run(env) {
+// Each cron run (once a minute) checks 3 times: at 0, 20 and 40 seconds.
+const CHECKS_PER_RUN = 3, CHECK_EVERY_MS = 20000;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
   if (!env.SPORTMONKS_KEY) return { skipped: 'no SPORTMONKS_KEY' };
   await setup(env);
-  const out = await scan(env);
-  if (new Date().getUTCMinutes() % 10 === 0) out.settled = await settle(env);
+  const t0 = Date.now(), out = { checks: 0, live: 0, maybe: 0, candidates: 0, logged: 0, alerts: 0, errors: 0 };
+  for (let i = 0; i < checks; i++) {
+    if (i) { const wait = t0 + i * every - Date.now(); if (wait > 0) await sleep(wait); }
+    try {
+      const r = await scan(env);
+      out.checks++; out.live = r.live; out.maybe = Math.max(out.maybe, r.maybe);
+      out.candidates += r.candidates; out.logged += r.logged; out.alerts += r.alerts;
+    } catch (e) { out.errors++; out.error = e.message; }
+  }
+  if (new Date(t0).getUTCMinutes() % 10 === 0) {
+    out.settled = await settle(env);
+    // forget cached goal timelines older than 6 hours
+    await env.DB.prepare("DELETE FROM meta WHERE k LIKE 'tl:%' AND json_extract(v, '$.at') < ?").bind(Math.floor(t0 / 1000) - 6 * 3600).run();
+  }
   await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('last', ?)").bind(JSON.stringify({ at: new Date().toISOString(), ...out })).run();
   return out;
 }
