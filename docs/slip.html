@@ -54,6 +54,7 @@ td small{color:var(--mute)}
   <button data-t="movers">Price movers</button>
   <button data-t="past">Past picks</button>
   <button data-t="model">Model check</button>
+  <button data-t="live">Live patterns</button>
   <button data-t="how">How it works</button>
 </nav>
 <main>
@@ -65,6 +66,7 @@ td small{color:var(--mute)}
   <section id="movers" class="hide"><div class="card tw"><p class="note">Selections whose margin-free chance has risen by 3+ points since we first saw the match — money coming in. Price shown: first best price → best price now.</p><table id="mt"></table></div></section>
   <section id="past" class="hide"></section>
   <section id="model" class="hide"></section>
+  <section id="live" class="hide"></section>
   <section id="how" class="hide"><div class="card" id="howc"></div></section>
 </main>
 <script>
@@ -146,6 +148,20 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
     <div class="card tw"><h2>Recent runs</h2><table><tr><th>Time (UTC)</th><th>Job</th><th>Details</th></tr>${s.runs.map(r => {
       const { t, job, limits, calls, ...rest } = r; return `<tr><td>${esc(t.slice(5, 16).replace('T', ' '))}</td><td>${esc(job)}</td><td><small>${esc(JSON.stringify(rest))}</small></td></tr>`; }).join('')}</table></div>`;
   howText(d.settings);
+});
+
+fetch('data/sm/live.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null).then(L => {
+  const intro = `<div class="card"><h2>Live patterns (test)</h2><p class="note">Two situations from live betting, logged automatically every minute with the live price at that moment, then graded. Paper only. <b>2-0 at 30'</b>: is there another goal before half-time? <b>Two-goal lead at 70–78'</b>: is there another goal before full time? History (2,759 matches with minute data): 40% and 49%. A price is worth taking only if the hit rate beats 1 ÷ price (e.g. 45% at 2.20).</p></div>`;
+  if (!L) { $('#live').innerHTML = intro + '<div class="card empty">Starts with the Sportmonks trial and the live logger (planned for 19 Nov 2026).</div>'; return; }
+  const sumRows = Object.entries(L.summary || {}).map(([k, v]) => {
+    const priced = L.rows.filter(r => r.pattern === k && (r.hit === 0 || r.hit === 1) && r.best);
+    const avg = priced.length ? priced.reduce((s, r) => s + r.best, 0) / priced.length : null;
+    return `<tr><td>${esc((L.patterns[k] || {}).name || k)}</td><td class="n">${v.n}</td><td class="n">${v.settled ? pct(v.hit / v.settled) : '–'} <small>(${v.hit}/${v.settled})</small></td><td class="n">${avg ? avg.toFixed(2) : '–'}</td><td class="n">${avg ? pct(1 / avg, 0) : '–'}</td><td class="n">${eur(v.withPrice ? v.profit : null)}</td></tr>`;
+  }).join('');
+  const rows = (L.rows || []).slice(0, 200).map(r => `<tr><td>${when(r.at)}<br><small>${esc(r.league)}</small></td><td>${esc(r.home)} ${esc(r.score)} ${esc(r.away)} · ${r.minute}'<br><small>${esc((L.patterns[r.pattern] || {}).name || r.pattern)}</small></td>
+    <td class="n">${r.best ? Number(r.best).toFixed(2) : '–'}<br><small>${esc(r.best_book || '')}</small></td><td>${r.hit === 1 ? '<span class="b ok">yes</span>' : r.hit === 0 ? '<span class="b no">no</span>' : r.hit === -1 ? '<span class="b">void</span>' : '<span class="b">open</span>'} <small>${esc(r.result || '')}</small></td></tr>`).join('');
+  $('#live').innerHTML = intro + `<div class="card tw"><table><tr><th>Pattern</th><th class="n">Logged</th><th class="n">Next goal came</th><th class="n">Avg price</th><th class="n">Break-even</th><th class="n">Paper €10</th></tr>${sumRows || '<tr><td colspan="6" class="empty">Nothing logged yet.</td></tr>'}</table></div>
+    <div class="card tw"><table><tr><th>When</th><th>Match</th><th class="n">Live price</th><th>Goal?</th></tr>${rows || '<tr><td colspan="4" class="empty">Nothing logged yet.</td></tr>'}</table></div>`;
 });
 
 function howText(c) {
