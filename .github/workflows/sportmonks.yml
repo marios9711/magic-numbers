@@ -52,6 +52,18 @@ jobs:
         env:
           SPORTMONKS_KEY: ${{ secrets.SPORTMONKS_KEY }}
         run: node scripts/sm/slip.js
+      - name: Copy the live pattern log (Cloudflare worker)
+        if: steps.key.outputs.on == 'yes'
+        env:
+          LIVE_LOG_URL: ${{ secrets.LIVE_LOG_URL }}
+        run: |
+          if [ -n "$LIVE_LOG_URL" ]; then curl -fsS "$LIVE_LOG_URL/log" -o docs/data/sm/live.json || echo "live log not reachable"; else echo "No LIVE_LOG_URL secret yet."; fi
+      - name: Telegram (new picks and results)
+        if: steps.key.outputs.on == 'yes'
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+        run: node scripts/sm/notify.js || echo "Telegram message failed"
       - name: Save
         if: steps.key.outputs.on == 'yes'
         run: |
