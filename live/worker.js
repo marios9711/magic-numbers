@@ -1,13 +1,21 @@
 // Magic Numbers — live pattern logger (Cloudflare Worker, cron every minute).
 //
-// Watches every live match in the Sportmonks plan and logs two pre-set situations from Marios's
-// live-betting experience, with the live price at that moment, then the result:
-//   P30  first half, 28'–34', score 2-0 or 0-2  -> another goal before half-time?
-//        (StatsBomb history, 2,759 matches: 40% (96/238))
-//   P75  second half, 70'–78', a two-goal lead   -> another goal before full time?
-//        (history: 49% at 75', 56% at 70', 40% at 80')
-// Each trigger is stored once (D1 table `triggers`), sent to Telegram, and graded after the
-// match (90-minute score; P30 from the half-time score). Logging only: no bets are placed.
+// Watches every live match in the Sportmonks plan and logs pre-set situations from Marios's
+// live-betting experience, with the live price at that moment, then the result. Only the ALERT
+// patterns (Marios's rules) go to Telegram; the others are logged quietly so the rules can be
+// compared with the situations they leave out. History = StatsBomb minute data, 2,759 matches.
+//   P30   ALERT  1st half 28'–34', 2-0/0-2, the two goals 5+ minutes apart   -> goal before HT?
+//   P30c  quiet  same, but goals < 5 minutes apart (or minutes unknown)
+//               (all 2-0 at 30': 40%; gap <5' 41%, 5–10' 51%, 10'+ 33%)
+//   P75   ALERT  2nd half 70'–78', two-goal lead, last two goals 5+ minutes apart -> another goal?
+//   P75c  quiet  same, last two goals < 5 minutes apart (or minutes unknown)   (history 49%)
+//   PEQ   ALERT  pre-match favourite v outsider; outsider scores 7'–12', favourite equalises by
+//                25', still 1-1 -> 3rd goal before HT (over 2.5 1st half). History (favourite =
+//                better season points, not odds): 8/10; wider windows 63–71% vs 47–53% for other 1-1s.
+//   PEQW  quiet  wider version: outsider scores before 20', favourite equalises before 30'
+// Favourite = pre-match margin-free win chance at least 20 points above the opponent's (median of
+// all bookmakers). Each trigger is stored once (D1 table `triggers`) and graded after the match
+// (90-minute score; first-half patterns from the half-time score). Logging only: no bets.
 //
 // Bindings / secrets (set in the Cloudflare dashboard, never in this file):
 //   DB             D1 database
@@ -21,9 +29,15 @@
 
 const BASE = 'https://api.sportmonks.com/v3';
 const PATTERNS = {
-  P30: { name: '2-0 at 30\' → goal before HT', history: '40% of 238 matches', half: true, ask: 'Goal before half-time?', short: 'goal before half-time' },
-  P75: { name: 'two-goal lead at 70–78\' → another goal', history: '49% at 75\', 56% at 70\'', half: false, ask: 'Another goal?', short: 'another goal' },
+  P30: { name: '2-0 at 30\', goals 5+ min apart → goal before HT', history: '40% (all 2-0 at 30\')', half: true, alert: true, short: 'goal before half-time' },
+  P30c: { name: '2-0 at 30\', goals close together (logged only)', history: '41% (gap < 5\')', half: true, alert: false, short: 'goal before half-time' },
+  P75: { name: 'two-goal lead at 70–78\', last goals 5+ min apart → another goal', history: '49% at 75\'', half: false, alert: true, short: 'another goal' },
+  P75c: { name: 'two-goal lead at 70–78\', last goals close together (logged only)', history: '47% (gap < 5\')', half: false, alert: false, short: 'another goal' },
+  PEQ: { name: 'outsider scores 7–12\', favourite equalises by 25\' → goal before HT', history: '8/10; 63–71% in wider windows', half: true, alert: true, short: 'goal before half-time' },
+  PEQW: { name: 'outsider scores <20\', favourite equalises <30\' (logged only)', history: '71% (35/49)', half: true, alert: false, short: 'goal before half-time' },
 };
+const MIN_GAP = 5;            // goals closer together than this (minutes) don't trigger an alert
+const FAV_MARGIN = 0.20;      // favourite: pre-match win chance at least this much above the other side's
 const FINISHED = /^(FT|AET|FT_PEN|AWARDED)$/;
 const DEAD = /CANC|POSTP|ABAN|DELETED|SUSP|INTERRUPTED/;
 
@@ -46,14 +60,65 @@ function clock(f) {
   return { period: p.type_id === 1 ? 1 : p.type_id === 2 ? 2 : 0, minute: p.minutes, added: p.time_added };
 }
 
-// Which pattern (if any) a live fixture is in right now.
+// Goals in order, from the match events (goal, own goal, penalty; VAR-cancelled ones dropped).
+// Who scored is read from the score after each goal ("result"), so own goals are counted right.
+// Returns null when the events don't add up to the current score.
+function timeline(f, s) {
+  const ev = (f.events || []).filter(e => [14, 15, 16].includes(e.type_id) && !e.rescinded)
+    .sort((x, y) => (x.minute - y.minute) || ((x.extra_minute || 0) - (y.extra_minute || 0)) || ((x.sort_order || 0) - (y.sort_order || 0)));
+  const homeId = side(f, 'home').id;
+  let h = 0, a = 0;
+  const out = [];
+  for (const e of ev) {
+    const r = /^(\d+)\s*-\s*(\d+)$/.exec(String(e.result || ''));
+    let who;
+    if (r) { const nh = +r[1], na = +r[2]; who = nh > h ? 'h' : na > a ? 'a' : null; h = nh; a = na; }
+    else { who = (e.participant_id === homeId) !== (e.type_id === 15) ? 'h' : 'a'; who === 'h' ? h++ : a++; }
+    if (who) out.push({ min: e.minute + (e.extra_minute ? e.extra_minute / 100 : 0), side: who });
+  }
+  return s && out.length === s[0] + s[1] && out.filter(g => g.side === 'h').length === s[0] ? out : null;
+}
+
+// Which pattern (if any) a live fixture is in right now. PEQ/PEQW still need the favourite check.
 function match(f) {
   const c = clock(f), s = goals(f, 'CURRENT');
   if (!c || !s) return null;
   const [h, a] = s, tot = h + a, lead = Math.abs(h - a);
-  if (c.period === 1 && c.minute >= 28 && c.minute <= 34 && tot === 2 && lead === 2) return { key: 'P30', c, s };
-  if (c.period === 2 && c.minute >= 70 && c.minute <= 78 && lead === 2) return { key: 'P75', c, s };
+  const tl = timeline(f, s);
+  const gap = () => (tl && tl.length >= 2 ? tl[tl.length - 1].min - tl[tl.length - 2].min : null);
+  const info = { goals: tl ? tl.map(g => `${Math.floor(g.min)}'${g.side}`) : null };
+  if (c.period === 1 && c.minute >= 28 && c.minute <= 34 && tot === 2 && lead === 2) {
+    const g = gap(); return { key: g != null && g >= MIN_GAP ? 'P30' : 'P30c', c, s, info: { ...info, gap: g } };
+  }
+  if (c.period === 2 && c.minute >= 70 && c.minute <= 78 && lead === 2) {
+    const g = gap(); return { key: g != null && g >= MIN_GAP ? 'P75' : 'P75c', c, s, info: { ...info, gap: g } };
+  }
+  if (c.period === 1 && c.minute <= 34 && h === 1 && a === 1 && tl) {
+    const [g1, g2] = tl;
+    if (g1.side !== g2.side && c.minute >= Math.floor(g2.min)) {
+      if (g1.min >= 7 && g1.min < 13 && g2.min < 26) return { key: 'PEQ', c, s, info, need: g2.side };
+      if (g1.min < 20 && g2.min < 30) return { key: 'PEQW', c, s, info, need: g2.side };
+    }
+  }
   return null;
+}
+
+// Pre-match favourite ('h', 'a' or null) from 1X2 prices, margin removed per bookmaker, median.
+async function favourite(env, fid, mk1x2) {
+  const j = await sm(env, `/football/odds/pre-match/fixtures/${fid}`, { filters: `markets:${mk1x2}` });
+  const per = {};
+  for (const o of j.data || []) {
+    const L = String(o.label || o.name || '').toLowerCase();
+    const k = L === '1' || L === 'home' ? 'h' : L === '2' || L === 'away' ? 'a' : L === 'x' || L === 'draw' ? 'd' : null;
+    const p = Number(o.value);
+    if (k && p > 1) (per[o.bookmaker_id] = per[o.bookmaker_id] || {})[k] = 1 / p;
+  }
+  const hs = [], as = [];
+  for (const b of Object.values(per)) if (b.h && b.d && b.a) { const t = b.h + b.d + b.a; hs.push(b.h / t); as.push(b.a / t); }
+  if (!hs.length) return { fav: null };
+  const med = v => { v.sort((x, y) => x - y); const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+  const ph = med(hs), pa = med(as);
+  return { fav: ph - pa >= FAV_MARGIN ? 'h' : pa - ph >= FAV_MARGIN ? 'a' : null, ph: Math.round(ph * 1000) / 1000, pa: Math.round(pa * 1000) / 1000 };
 }
 
 // Live "over" price for (current goals + 0.5): 1st-half market for P30, full match for P75.
@@ -121,12 +186,23 @@ async function bookNames(env) {
 
 async function scan(env) {
   const now = Math.floor(Date.now() / 1000);
-  const j = await sm(env, '/football/livescores/inplay', { include: 'participants;scores;currentPeriod;league' });
+  const j = await sm(env, '/football/livescores/inplay', { include: 'participants;scores;currentPeriod;league;events' });
   const live = (j.data || []).map(f => ({ f, m: match(f) })).filter(x => x.m);
-  let books = null, logged = 0;
+  let books = null, logged = 0, alerts = 0;
   for (const { f, m } of live) {
     const id = `${f.id}:${m.key}`;
     if (await env.DB.prepare('SELECT 1 FROM triggers WHERE id = ?').bind(id).first()) continue;
+    if (m.need && await env.DB.prepare('SELECT 1 FROM meta WHERE k = ?').bind(`checked:${id}`).first()) continue;
+    if (m.need) { // favourite-equalises patterns: the side that equalised must be the pre-match favourite
+      let fv = { fav: null };
+      try { fv = await favourite(env, f.id, env.MARKET_1X2 || 1); } catch { /* no pre-match odds */ }
+      m.info.fav = fv;
+      if (fv.fav !== m.need) {
+        // remember that this match was checked, so the odds aren't fetched again every minute
+        await env.DB.prepare('INSERT OR IGNORE INTO meta (k, v) VALUES (?, ?)').bind(`checked:${id}`, JSON.stringify(fv)).run();
+        continue;
+      }
+    }
     books = books || await bookNames(env);
     let d = f;
     try { d = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;scores;statistics.type;inplayOdds' })).data || f; } catch { /* log without odds */ }
@@ -144,14 +220,15 @@ async function scan(env) {
       `⚽ ${esc(H)} ${sc} ${esc(A)} · ${m.c.minute}'`,
       best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : `Over ${line}${P.half ? ' (1st half)' : ''}`,
     ].join('\n');
-    const sent = await telegram(env, text).catch(() => false);
+    const sent = P.alert ? await telegram(env, text).catch(() => false) : false;
+    if (P.alert) alerts++;
     await env.DB.prepare(`INSERT OR IGNORE INTO triggers (id, fid, pattern, at, minute, score, league, home, away, line, best, best_book, prices, stats, sent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(id, f.id, m.key, now, m.c.minute, sc, lg, H, A, line, best ? best.price : null, best ? best.book : null,
-        JSON.stringify(prices.slice(0, 8)), JSON.stringify(st), sent ? 1 : 0).run();
+        JSON.stringify(prices.slice(0, 8)), JSON.stringify({ ...st, ...m.info }), sent ? 1 : 0).run();
     logged++;
   }
-  return { live: (j.data || []).length, candidates: live.length, logged };
+  return { live: (j.data || []).length, candidates: live.length, logged, alerts };
 }
 
 // Grade finished triggers (checked every 10 minutes).
@@ -168,7 +245,7 @@ async function settle(env) {
     if (!f) continue;
     const state = f.state ? (f.state.developer_name || f.state.state) : '';
     let hit = null, result = '';
-    if (t.pattern === 'P30') {
+    if ((PATTERNS[t.pattern] || {}).half) {
       const ht = goals(f, '1ST_HALF');
       if (ht && (FINISHED.test(state) || /HT|2ND|INPLAY_2ND|BREAK/i.test(state))) { hit = ht[0] + ht[1] > t.line ? 1 : 0; result = `HT ${ht[0]}-${ht[1]}`; }
     } else if (FINISHED.test(state)) {
@@ -178,7 +255,8 @@ async function settle(env) {
     if (hit == null && (DEAD.test(state) || now - t.at > 4 * 3600)) { hit = -1; result = `void (${state || 'no result'})`; }
     if (hit == null) continue;
     await env.DB.prepare('UPDATE triggers SET hit = ?, result = ?, settled_at = ? WHERE id = ?').bind(hit, result, now, t.id).run();
-    if (hit >= 0) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(PATTERNS[t.pattern].short)} (${esc(result)})`).catch(() => {});
+    const P = PATTERNS[t.pattern] || {};
+    if (hit >= 0 && P.alert) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`).catch(() => {});
     n++;
   }
   return n;
@@ -258,4 +336,4 @@ export default {
   },
 };
 
-export { match, overPrices, statsOf, run, summary };
+export { match, timeline, overPrices, statsOf, run, summary };
