@@ -16,6 +16,7 @@
 //   TG_CHAT        Telegram chat id to send to              — optional
 // HTTP:  GET /log  -> last 500 triggers as JSON (the GitHub job copies it into the repo daily)
 //        GET /test  -> one Telegram test message (at most every 10 minutes)
+//        GET /demo  -> three EXAMPLE messages in the real formats (at most every 10 minutes)
 //        GET /      -> short status
 
 const BASE = 'https://api.sportmonks.com/v3';
@@ -217,6 +218,40 @@ export default {
     try {
       await setup(env);
       if (url.pathname === '/log') return new Response(JSON.stringify(await summary(env)), { headers });
+      if (url.pathname === '/demo') { // three EXAMPLE messages in the real formats (at most every 10 minutes)
+        const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'demo'").first();
+        if (t && Date.now() - Number(t.v) < 600e3) return new Response(JSON.stringify({ ok: false, error: 'demo already sent in the last 10 minutes' }), { headers });
+        await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('demo', ?)").bind(String(Date.now())).run();
+        const msgs = [
+          ['🧪 <b>EXAMPLE — not a real pick</b>', '',
+            '🧾 <b>Daily slip 2026-11-21</b> — 3 new picks (singles, paper only)', '',
+            '<b>Win</b>',
+            '• Sat 15:00 Example Town – Sample City <i>(Norway · OBOS-ligaen)</i>',
+            '   Sample City to win @ <b>2.45</b> Unibet · chance 44% · edge +7.8% · motivation', '',
+            '<b>Over 2.5</b>',
+            '• Sat 17:30 Demo United – Test Rovers <i>(Japan · J2 League)</i>',
+            '   Over 2.5 goals @ <b>2.10</b> bet365 · chance 51% · edge +7.1%', '',
+            '<b>1st-half over 1.5</b>',
+            '• Sun 13:00 Model Athletic – Placeholder FC <i>(Brazil · Série B)</i>',
+            '   Over 1.5 goals, 1st half @ <b>3.20</b> 1xBet · chance 33% · edge +5.6%'].join('\n'),
+          ['🧪 <b>EXAMPLE — not a real alert</b>', '',
+            "⚽ <b>Korea K League 2</b> · Demo United 2-0 Test Rovers · 31'",
+            "Pattern: 2-0 at 30' → goal before HT",
+            'Over 2.5 (1st half) @ <b>2.30</b> bet365 · Pinnacle 2.18',
+            'History: 40% of 238 matches · break-even 43%',
+            'Corners 5-1 · shots 9-2 · dangerous attacks 38-12',
+            '<i>Logged for the test — paper only.</i>'].join('\n'),
+          ['🧪 <b>EXAMPLE</b>', '', "✅ Demo United – Test Rovers: 2-0 at 30' → goal before HT · HT 3-0 · price was 2.30", '',
+            '📊 <b>Results</b> — 2/3 won, +€15.50 (€10 a pick)',
+            '✅ Example Town – Sample City 0-1 (HT 0-0) · Sample City to win @ 2.45',
+            '✅ Demo United – Test Rovers 3-1 (HT 3-0) · Over 2.5 goals @ 2.10',
+            '❌ Model Athletic – Placeholder FC 1-1 (HT 0-1) · Over 1.5 goals, 1st half @ 3.20', '',
+            'So far: 3 graded, 67% won, +€15.50'].join('\n'),
+        ];
+        const sent = [];
+        for (const m of msgs) sent.push(await telegram(env, m).catch(() => false));
+        return new Response(JSON.stringify({ ok: true, sent }), { headers });
+      }
       if (url.pathname === '/test') { // sends one Telegram test message (at most every 10 minutes)
         const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'test'").first();
         if (t && Date.now() - Number(t.v) < 600e3) return new Response(JSON.stringify({ ok: false, error: 'test already sent in the last 10 minutes' }), { headers });
