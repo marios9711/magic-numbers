@@ -30,6 +30,10 @@
 //        GET /test  -> one Telegram test message (at most every 10 minutes)
 //        GET /demo  -> three EXAMPLE messages in the real formats (at most every 10 minutes)
 //        GET /      -> short status
+// Also (every 2 minutes): the line-up check for the daily slip picks, see lineupCheck() below.
+// Alerts are held back (logged with sent = -1, no message) after a red card or when the best live
+// price is below MIN_PRICE. For every trigger the last-10-minute pressure (corners, shots, dangerous
+// attacks per side) is stored, to test later whether pressure improves the late-goal alert.
 
 const BASE = 'https://api.sportmonks.com/v3';
 const PATTERNS = {
@@ -43,6 +47,9 @@ const PATTERNS = {
 };
 const MIN_GAP = 5;            // goals closer together than this (minutes) don't trigger an alert
 const FAV_MARGIN = 0.20;      // favourite: pre-match win chance at least this much above the other side's
+const MIN_PRICE = 1.80;       // an alert whose best live price is below this is held back (logged, not sent)
+const RED_CARDS = [20, 21];   // event types: red card, second yellow
+const TREND = { 34: 'corners', 42: 'shots', 86: 'onTarget', 44: 'dangerous', 43: 'attacks' }; // trend type ids
 const FINISHED = /^(FT|AET|FT_PEN|AWARDED)$/;
 const DEAD = /CANC|POSTP|ABAN|DELETED|SUSP|INTERRUPTED/;
 
@@ -158,11 +165,41 @@ function statsOf(f) {
   return out;
 }
 
-async function telegram(env, text) {
+// Red cards so far ([{ side, min }]), from the match events.
+function redCards(f) {
+  const homeId = side(f, 'home').id;
+  return (f.events || []).filter(e => RED_CARDS.includes(e.type_id) && !e.rescinded)
+    .map(e => ({ side: e.participant_id === homeId ? 'h' : 'a', min: e.minute }));
+}
+
+// Pressure in the last 10 minutes (corners, shots, dangerous attacks per side), from the per-minute
+// "trends" include: value now minus value 10 minutes ago. null when Sportmonks sends no trends.
+function pressure(f, minute) {
+  const homeId = side(f, 'home').id, by = {};
+  for (const t of f.trends || []) {
+    const k = TREND[t.type_id], v = Number(t.value ?? t.amount);
+    if (!k || !Number.isFinite(v) || t.minute == null) continue;
+    (by[k] = by[k] || { home: [], away: [] })[t.participant_id === homeId ? 'home' : 'away'].push([Number(t.minute), v]);
+  }
+  const out = {};
+  for (const [k, sides] of Object.entries(by)) {
+    out[k] = {};
+    for (const [loc, pts] of Object.entries(sides)) {
+      pts.sort((x, y) => x[0] - y[0]);
+      const now = pts.length ? pts[pts.length - 1][1] : 0;
+      const before = pts.filter(x => x[0] <= minute - 10).pop();
+      out[k][loc] = now - (before ? before[1] : 0);
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+async function telegram(env, text, replyTo) {
   if (!env.TG_TOKEN || !env.TG_CHAT) return false;
+  const body = { chat_id: env.TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true };
+  if (replyTo) body.reply_parameters = { message_id: Number(replyTo), allow_sending_without_reply: true };
   const r = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/sendMessage`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: env.TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
   return r.ok;
 }
@@ -174,6 +211,8 @@ async function setup(env) {
     home TEXT, away TEXT, line REAL, best REAL, best_book TEXT, prices TEXT, stats TEXT, sent INTEGER,
     result TEXT, hit INTEGER, settled_at INTEGER)`).run();
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)').run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS lineups (
+    pid TEXT PRIMARY KEY, fid INTEGER, ts INTEGER, at INTEGER, status TEXT, text TEXT, info TEXT, sent INTEGER)`).run();
 }
 
 async function bookNames(env) {
@@ -253,12 +292,14 @@ async function scan(env) {
     }
     books = books || await bookNames(env);
     let d = f;
-    try { d = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;scores;statistics.type;inplayOdds' })).data || f; } catch { /* log without odds */ }
+    try { d = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;scores;statistics.type;inplayOdds;events;trends' })).data || f; } catch { /* log without odds */ }
     const P = PATTERNS[m.key], line = m.s[0] + m.s[1] + 0.5;
     const prices = overPrices(d.inplayodds || d.inplayOdds, line, P.half, books);
     const best = prices[0] || null;
     const pin = prices.find(x => /pinnacle/i.test(x.book)), b365 = prices.find(x => /bet365/i.test(x.book));
-    const st = statsOf(d);
+    const st = statsOf(d), reds = redCards(d), p10 = pressure(d, m.c.minute);
+    // Alerts are held back (logged quietly) after a red card, or when the live price is too short.
+    const held = !P.alert ? null : reds.length ? 'red card' : best && best.price < MIN_PRICE ? `price below ${MIN_PRICE.toFixed(2)}` : null;
     const H = side(f, 'home').name, A = side(f, 'away').name, lg = f.league ? f.league.name : '';
     const sc = `${m.s[0]}-${m.s[1]}`;
     const be = best ? `break-even ${(100 / best.price).toFixed(0)}%` : 'no live price found';
@@ -268,12 +309,13 @@ async function scan(env) {
       `⚽ ${esc(H)} ${sc} ${esc(A)} · ${m.c.minute}'`,
       best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : `Over ${line}${P.half ? ' (1st half)' : ''}`,
     ].join('\n');
-    const sent = P.alert ? await telegram(env, text).catch(() => false) : false;
-    if (P.alert) alerts++;
+    const sent = P.alert && !held ? await telegram(env, text).catch(() => false) : false;
+    if (P.alert && !held) alerts++;
     await env.DB.prepare(`INSERT OR IGNORE INTO triggers (id, fid, pattern, at, minute, score, league, home, away, line, best, best_book, prices, stats, sent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(id, f.id, m.key, now, m.c.minute, sc, lg, H, A, line, best ? best.price : null, best ? best.book : null,
-        JSON.stringify(prices.slice(0, 8)), JSON.stringify({ ...st, ...m.info }), sent ? 1 : 0).run();
+        JSON.stringify(prices.slice(0, 8)), JSON.stringify({ ...st, ...m.info, reds: reds.length ? reds : undefined, p10: p10 || undefined, held: held || undefined }),
+        held ? -1 : sent ? 1 : 0).run();
     logged++;
   }
   return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts };
@@ -304,10 +346,110 @@ async function settle(env) {
     if (hit == null) continue;
     await env.DB.prepare('UPDATE triggers SET hit = ?, result = ?, settled_at = ? WHERE id = ?').bind(hit, result, now, t.id).run();
     const P = PATTERNS[t.pattern] || {};
-    if (hit >= 0 && P.alert) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`).catch(() => {});
+    if (hit >= 0 && P.alert && t.sent !== -1) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`).catch(() => {});
     n++;
   }
   return n;
+}
+
+// --- Line-up check for the daily slip --------------------------------------------------------------
+// About an hour before kick-off the official line-ups come out. For each slip pick the logger then
+// checks whether the side(s) that matter start without key players, and replies in Telegram to the
+// slip message: ✅ line-ups OK, or ⚠️ with the names. Sides that matter: the backed team for a win
+// pick, both teams for goals picks. Key players:
+//   scorers  – the team's top 3 league scorers this season with 3+ goals
+//   regulars – started at least 4 of the team's last 5 matches (n-1 of n when fewer, at least 3)
+// Warning when a key scorer doesn't start, or 3+ regulars don't. Everything is stored (table
+// `lineups`) so warned and OK picks can be compared on the results.
+const PAGES = 'https://marios9711.github.io/magic-numbers/data/sm';
+const LU_TOP = 3, LU_MIN_GOALS = 3, LU_MAX_REG_MISSING = 2, LU_RECENT = 5;
+const ymd = ts => new Date(ts * 1000).toISOString().slice(0, 10);
+const hhmm = ts => new Date(ts * 1000).toLocaleTimeString('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' });
+const pname = l => l.player_name || (l.player && (l.player.display_name || l.player.common_name || l.player.name)) || `#${l.player_id}`;
+const short = n => { const w = String(n).trim().split(/\s+/); return w.length > 1 ? `${w[0][0]}. ${w.slice(1).join(' ')}` : String(n); };
+
+async function pagesJSON(file) {
+  try { const r = await fetch(`${PAGES}/${file}?t=${Date.now() >> 16}`); return r.ok ? await r.json() : null; } catch { return null; }
+}
+
+// League top scorers of a season (cached 12 hours): [{ pid, tid, goals, name }]
+async function seasonScorers(env, sid) {
+  const k = `top:${sid}`, row = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(k).first();
+  if (row) { const c = JSON.parse(row.v); if (Date.now() - c.at < 12 * 3600e3) return c.list; }
+  const list = [];
+  for (let page = 1; page <= 4; page++) {
+    const j = await sm(env, `/football/topscorers/seasons/${sid}`, { include: 'player', filters: 'seasonTopscorerTypes:208', per_page: 50, page });
+    for (const t of j.data || []) if (t.type_id == null || t.type_id === 208)
+      list.push({ pid: t.player_id, tid: t.participant_id, goals: Number(t.total) || 0, name: t.player ? (t.player.display_name || t.player.common_name || t.player.name) : `#${t.player_id}` });
+    if (!j.pagination || !j.pagination.has_more) break;
+  }
+  await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(k, JSON.stringify({ at: Date.now(), list })).run();
+  return list;
+}
+
+// Regular starters from the team's last few matches with line-ups: [{ pid, name, starts, of }]
+async function regulars(env, tid, ts) {
+  const j = await sm(env, `/football/fixtures/between/${ymd(ts - 45 * 86400)}/${ymd(ts - 3600)}/${tid}`, { include: 'lineups', per_page: 50 });
+  const games = (j.data || []).map(f => ({ ts: f.starting_at_timestamp || 0, xi: (f.lineups || []).filter(l => l.type_id === 11 && l.team_id === tid) }))
+    .filter(g => g.xi.length >= 11 && g.ts < ts).sort((a, b) => b.ts - a.ts).slice(0, LU_RECENT);
+  if (games.length < 3) return [];
+  const need = games.length === LU_RECENT ? LU_RECENT - 1 : games.length - 1, cnt = {};
+  for (const g of games) for (const l of g.xi) { const c = cnt[l.player_id] = cnt[l.player_id] || { pid: l.player_id, name: pname(l), starts: 0, of: games.length }; c.starts++; }
+  return Object.values(cnt).filter(c => c.starts >= need);
+}
+
+// Check one team's starting XI against its key players.
+async function teamCheck(env, f, team, xi) {
+  const started = new Set(xi.filter(l => l.team_id === team.id).map(l => l.player_id));
+  let scorers = [], regs = [];
+  try { scorers = (await seasonScorers(env, f.season_id)).filter(x => x.tid === team.id && x.goals >= LU_MIN_GOALS).sort((a, b) => b.goals - a.goals).slice(0, LU_TOP); } catch { /* no scorer data */ }
+  try { regs = await regulars(env, team.id, f.starting_at_timestamp); } catch { /* no recent line-ups */ }
+  const missTop = scorers.map((x, i) => ({ ...x, rank: i + 1 })).filter(x => !started.has(x.pid));
+  const missReg = regs.filter(x => !started.has(x.pid) && !missTop.some(y => y.pid === x.pid));
+  const warn = missTop.length > 0 || missReg.length > LU_MAX_REG_MISSING;
+  const bits = missTop.map(x => `${short(x.name)} (${x.rank === 1 ? 'top scorer, ' : ''}${x.goals} goals)`);
+  if (missReg.length) bits.push(`${missReg.length} regular starter${missReg.length > 1 ? 's' : ''} (${missReg.slice(0, 3).map(x => short(x.name)).join(', ')}${missReg.length > 3 ? '…' : ''})`);
+  return { team: team.name, warn, text: bits.filter(Boolean).join(', '), scorers: scorers.length, regulars: regs.length,
+    missTop: missTop.map(x => ({ name: x.name, goals: x.goals, rank: x.rank })), missReg: missReg.map(x => x.name) };
+}
+
+// Runs every 2 minutes; does the full check for at most one pick per run (subrequest limits).
+async function lineupCheck(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const slip = await pagesJSON('slip.json');
+  if (!slip) return { picks: 0 };
+  const picks = [...(slip.slip || []), ...(slip.history || [])].filter(p => p.ts > now - 15 * 60 && p.ts < now + 90 * 60);
+  if (!picks.length) return { picks: 0 };
+  const done = await inTable(env, 'lineups', 'pid', picks.map(p => p.id));
+  const todo = picks.filter(p => !done.has(p.id)).sort((a, b) => a.ts - b.ts);
+  let msgs = null, checked = 0, waiting = 0;
+  for (const p of todo) {
+    if (checked) break;
+    let f;
+    try { f = (await sm(env, `/football/fixtures/${p.fid}`, { include: 'participants;lineups' })).data; } catch { continue; }
+    if (!f) continue;
+    const xi = (f.lineups || []).filter(l => l.type_id === 11), H = side(f, 'home'), A = side(f, 'away');
+    const full = t => xi.filter(l => l.team_id === t.id).length >= 11;
+    if (!full(H) || !full(A)) {
+      if (now > p.ts + 10 * 60) await env.DB.prepare('INSERT OR IGNORE INTO lineups (pid, fid, ts, at, status, sent) VALUES (?, ?, ?, ?, ?, 0)').bind(p.id, p.fid, p.ts, now, 'none').run();
+      else waiting++;
+      continue;
+    }
+    checked++;
+    const sides = p.key === '1' ? [H] : p.key === '2' ? [A] : [H, A];
+    const res = [];
+    for (const t of sides) res.push(await teamCheck(env, f, t, xi));
+    const warn = res.some(r => r.warn);
+    const head = `${esc(p.hn)} – ${esc(p.an)} · ${hhmm(p.ts)}`, pk = `${esc(p.pick)} @ <b>${Number(p.odds).toFixed(2)}</b>`;
+    const lines = warn
+      ? [`⚠️ ${head}`, pk, ...res.filter(r => r.warn).map(r => `${esc(r.team)} without ${esc(r.text)}`)]
+      : [`✅ ${head}`, `${pk} — line-ups OK`];
+    msgs = msgs || await pagesJSON('tgmsg.json') || {};
+    const sent = await telegram(env, lines.join('\n'), msgs[p.id]).catch(() => false);
+    await env.DB.prepare('INSERT OR REPLACE INTO lineups (pid, fid, ts, at, status, text, info, sent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(p.id, p.fid, p.ts, now, warn ? 'warn' : 'ok', lines.slice(2).join(' · '), JSON.stringify(res), sent ? 1 : 0).run();
+  }
+  return { picks: picks.length, checked, waiting };
 }
 
 // Each cron run (once a minute) checks 3 times: at 0, 20 and 40 seconds.
@@ -326,6 +468,9 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
       out.candidates += r.candidates; out.logged += r.logged; out.alerts += r.alerts;
     } catch (e) { out.errors++; out.error = e.message; }
   }
+  if (new Date(t0).getUTCMinutes() % 2 === 0) {
+    try { out.lineups = await lineupCheck(env); } catch (e) { out.lineups = { error: e.message }; }
+  }
   if (new Date(t0).getUTCMinutes() % 10 === 0) {
     out.settled = await settle(env);
     // forget cached goal timelines older than 6 hours
@@ -338,8 +483,12 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
 async function summary(env) {
   const rows = (await env.DB.prepare('SELECT * FROM triggers ORDER BY at DESC LIMIT 500').all()).results || [];
   const by = {};
+  // alerts held back (red card, short price) are counted on their own line
+  const pats = { ...PATTERNS };
+  for (const [k, P] of Object.entries(PATTERNS)) if (P.alert) pats[`${k}:held`] = { ...P, alert: false, name: `${P.name} — held back (red card or price below ${MIN_PRICE.toFixed(2)})` };
   for (const r of rows) {
-    const b = by[r.pattern] = by[r.pattern] || { n: 0, settled: 0, hit: 0, withPrice: 0, profit: 0 };
+    r.key = r.sent === -1 ? `${r.pattern}:held` : r.pattern;
+    const b = by[r.key] = by[r.key] || { n: 0, settled: 0, hit: 0, withPrice: 0, profit: 0 };
     b.n++;
     if (r.hit === 0 || r.hit === 1) {
       b.settled++; b.hit += r.hit;
@@ -347,7 +496,8 @@ async function summary(env) {
     }
   }
   const last = await env.DB.prepare("SELECT v FROM meta WHERE k = 'last'").first();
-  return { at: new Date().toISOString(), last: last ? JSON.parse(last.v) : null, patterns: PATTERNS, summary: by, rows };
+  const lineups = (await env.DB.prepare('SELECT * FROM lineups ORDER BY ts DESC LIMIT 400').all()).results || [];
+  return { at: new Date().toISOString(), lineups, last: last ? JSON.parse(last.v) : null, patterns: pats, summary: by, rows };
 }
 
 export default {
@@ -400,4 +550,4 @@ export default {
   },
 };
 
-export { match, timeline, overPrices, statsOf, run, summary };
+export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards };
