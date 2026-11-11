@@ -303,6 +303,8 @@ async function inTable(env, table, col, keys, withValue) {
 async function scan(env) {
   const now = Math.floor(Date.now() / 1000);
   const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod;state' });
+  let graded = 0;
+  try { graded = await liveSettle(env, j.data || []); } catch { /* graded later by settle() */ }
   const pre = (j.data || []).filter(maybe);
   const tkey = f => { const s = goals(f, 'CURRENT'); return `tl:${f.id}:${s[0]}-${s[1]}`; };
   const cache = await inTable(env, 'meta', 'k', pre.map(tkey), true);
@@ -382,13 +384,44 @@ async function scan(env) {
         held ? -1 : sent ? 1 : 0).run();
     logged++;
   }
-  return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts };
+  return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts, graded };
 }
 
-// Grade finished triggers (checked every 10 minutes).
+// Store a result and send ✅/❌ for alerts that were sent.
+async function grade(env, t, hit, result) {
+  const now = Math.floor(Date.now() / 1000);
+  const r = await env.DB.prepare('UPDATE triggers SET hit = ?, result = ?, settled_at = ? WHERE id = ? AND hit IS NULL').bind(hit, result, now, t.id).run();
+  if (r && r.meta && r.meta.changes === 0) return; // already graded by an overlapping run
+  const P = PATTERNS[t.pattern] || {};
+  if (hit >= 0 && P.alert && t.sent !== -1) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`).catch(() => {});
+}
+
+// Grade open triggers straight from the live list (every check, ~20 s): an over bet is won the moment
+// the goal goes in, and a 1st-half bet is lost as soon as half-time comes.
+async function liveSettle(env, liveList) {
+  const open = (await env.DB.prepare('SELECT * FROM triggers WHERE hit IS NULL').all()).results || [];
+  if (!open.length) return 0;
+  const byId = Object.fromEntries(liveList.map(f => [f.id, f]));
+  let n = 0;
+  for (const t of open) {
+    const f = byId[t.fid];
+    if (!f) continue;
+    const c = clock(f), cur = goals(f, 'CURRENT'), half = (PATTERNS[t.pattern] || {}).half;
+    if (!cur) continue;
+    const inFirst = (c && c.period === 1) && !atHT(f);
+    if (half) {
+      if (inFirst && cur[0] + cur[1] > t.line) { await grade(env, t, 1, `${cur[0]}-${cur[1]} at ${c.minute}'`); n++; continue; }
+      const ht = goals(f, '1ST_HALF');
+      if (!inFirst && ht && (atHT(f) || (c && c.period === 2))) { await grade(env, t, ht[0] + ht[1] > t.line ? 1 : 0, `HT ${ht[0]}-${ht[1]}`); n++; }
+    } else if (cur[0] + cur[1] > t.line) { await grade(env, t, 1, `${cur[0]}-${cur[1]}${c ? ` at ${c.minute}'` : ''}`); n++; }
+  }
+  return n;
+}
+
+// Grade finished triggers (every 2 minutes): losses at full time, and anything the live list missed.
 async function settle(env) {
   const now = Math.floor(Date.now() / 1000);
-  const open = (await env.DB.prepare('SELECT * FROM triggers WHERE hit IS NULL AND at < ? ORDER BY at LIMIT 40').bind(now - 1800).all()).results || [];
+  const open = (await env.DB.prepare('SELECT * FROM triggers WHERE hit IS NULL AND at < ? ORDER BY at LIMIT 40').bind(now - 300).all()).results || [];
   if (!open.length) return 0;
   const ids = [...new Set(open.map(t => t.fid))];
   const j = await sm(env, `/football/fixtures/multi/${ids.join(',')}`, { include: 'scores;state' });
@@ -408,9 +441,7 @@ async function settle(env) {
     }
     if (hit == null && (DEAD.test(state) || now - t.at > 4 * 3600)) { hit = -1; result = `void (${state || 'no result'})`; }
     if (hit == null) continue;
-    await env.DB.prepare('UPDATE triggers SET hit = ?, result = ?, settled_at = ? WHERE id = ?').bind(hit, result, now, t.id).run();
-    const P = PATTERNS[t.pattern] || {};
-    if (hit >= 0 && P.alert && t.sent !== -1) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`).catch(() => {});
+    await grade(env, t, hit, result);
     n++;
   }
   return n;
@@ -593,14 +624,16 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
     try {
       const r = await scan(env);
       out.checks++; out.live = r.live; out.maybe = Math.max(out.maybe, r.maybe);
-      out.candidates += r.candidates; out.logged += r.logged; out.alerts += r.alerts;
+      out.candidates += r.candidates; out.logged += r.logged; out.alerts += r.alerts; out.graded = (out.graded || 0) + (r.graded || 0);
     } catch (e) { out.errors++; out.error = e.message; }
   }
   if (new Date(t0).getUTCMinutes() % 2 === 0) {
     try { out.lineups = await lineupCheck(env); } catch (e) { out.lineups = { error: e.message }; }
   }
+  if (new Date(t0).getUTCMinutes() % 2 === 1) {
+    try { out.settled = await settle(env); } catch (e) { out.settleError = e.message; }
+  }
   if (new Date(t0).getUTCMinutes() % 10 === 0) {
-    out.settled = await settle(env);
     // forget cached goal timelines older than 6 hours
     await env.DB.prepare("DELETE FROM meta WHERE k LIKE 'tl:%' AND json_extract(v, '$.at') < ?").bind(Math.floor(t0 / 1000) - 6 * 3600).run();
   }
