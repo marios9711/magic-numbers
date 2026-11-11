@@ -7,6 +7,8 @@ const S = require('./smlib');
 
 const PAST_SEASONS = 3;
 const KEEP_SPARE = 250;           // leave this many Fixture calls for results.js and odds.js this hour
+const MAX_MIN = Number(process.env.HIST_MAX_MIN || 20); // stop after this many minutes (the step is killed at 35)
+const T0 = Date.now();
 
 (async () => {
   if (!S.needKey('history.js')) return;
@@ -60,6 +62,7 @@ const KEEP_SPARE = 250;           // leave this many Fixture calls for results.j
     .sort((a, b) => Number(b[0]) - Number(a[0])).map(([sid]) => sid);
   let seasonsDone = 0, matches = 0;
   for (const sid of todo) {
+    if (Date.now() - T0 > MAX_MIN * 60e3) { log.stopped = `time (${MAX_MIN} min)`; break; }
     const left = S.limits.Fixture;
     if (left != null && left < KEEP_SPARE + 20) { log.stopped = `Fixture calls left ${left}`; break; }
     try {
