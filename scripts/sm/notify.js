@@ -14,6 +14,8 @@ async function send(text) {
     body: JSON.stringify({ chat_id: CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true }),
   });
   if (!r.ok) throw new Error(`Telegram ${r.status}`);
+  const j = await r.json().catch(() => ({}));
+  return j.result && j.result.message_id;
 }
 
 (async () => {
@@ -21,6 +23,9 @@ async function send(text) {
   const picks = S.readJSON(S.p('picks.json'), { picks: [] }).picks;
   const done = S.readJSON(S.p('notified.json'), { picks: [], results: [] });
   const sentP = new Set(done.picks), sentR = new Set(done.results);
+  // Telegram message id of the slip message each pick was in (the live logger replies to it with
+  // the line-up check). Published with the site so the logger can read it.
+  const msgFile = S.p('../../docs/data/sm/tgmsg.json'), msgIds = S.readJSON(msgFile, {});
 
   const fresh = picks.filter(p => !sentP.has(p.id) && p.ts > S.now()).sort((a, b) => a.ts - b.ts);
   if (fresh.length) {
@@ -32,11 +37,12 @@ async function send(text) {
       lines.push(`\n<b>${NAMES[g]}</b>`);
       for (const p of ps) {
         // Short format (Marios's choice): match, pick and price only. Details stay on the site.
-        lines.push(`• ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`);
+        lines.push(`• ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`
+          + (p.warn ? `\n   ⚠️ ${esc(p.warn)}` : ''));
       }
     }
-    await send(lines.join('\n'));
-    for (const p of fresh) sentP.add(p.id);
+    const mid = await send(lines.join('\n'));
+    for (const p of fresh) { sentP.add(p.id); if (mid) msgIds[p.id] = mid; }
   }
 
   const graded = picks.filter(p => p.r != null && !sentR.has(p.id));
@@ -50,6 +56,7 @@ async function send(text) {
     for (const p of graded) sentR.add(p.id);
   }
 
+  S.writeJSON(msgFile, Object.fromEntries(Object.entries(msgIds).slice(-500)));
   S.writeJSON(S.p('notified.json'), { picks: [...sentP].slice(-3000), results: [...sentR].slice(-3000) });
   console.log('notify.js', JSON.stringify({ newPicks: fresh.length, results: graded.length }));
 })().catch(e => { console.error('notify.js failed:', e.message); process.exitCode = 1; });

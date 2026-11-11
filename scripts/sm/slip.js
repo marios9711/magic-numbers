@@ -15,6 +15,7 @@
 const S = require('./smlib');
 const Model = require('./model');
 const Mot = require('./motivation');
+const Squad = require('./squad');
 
 const CFG = {
   keys: { 1: 'win', 2: 'win', 'O2.5': 'over25', 'HO1.5': 'ht15' },
@@ -116,6 +117,7 @@ const isFamous = L => !!L && (/champions league|europa league|conference league/
     && x.odds >= CFG.minOdds && x.odds <= CFG.maxOdds && x.n >= CFG.minBooks
     && x.edge >= (x.ref === 'pin' ? CFG.minEdgePin : CFG.minEdgeCons) && x.move > -CFG.maxAgainst;
   const cands = sel.filter(ok).sort((a, b) => b.edge - a.edge);
+  const fresh = [];
   for (const c of cands) {
     if ((count[c.grp] || 0) >= CFG.caps[c.grp]) continue;
     const id = `${c.fid}:${c.key}`;
@@ -126,6 +128,12 @@ const isFamous = L => !!L && (/champions league|europa league|conference league/
       rules: c.rules.length ? c.rules : undefined, mot: c.mot, move0: r3(c.move), model: r3(c.model), n: c.n,
     });
     have.add(id); usedFixtures.add(c.fid); count[c.grp] = (count[c.grp] || 0) + 1;
+    fresh.push(log.picks[log.picks.length - 1]);
+  }
+  // Injuries/suspensions of key scorers for the new picks (a warning only; the pick stays).
+  for (const pk of fresh) {
+    try { const q = await Squad.check(pk); if (q) { pk.out = q.out.length ? q.out : undefined; pk.warn = q.warn || undefined; pk.squad = 1; } }
+    catch (e) { console.log('squad check failed', pk.id, e.message); }
   }
   // Later price (until kick-off) and result.
   const byId = new Map(sel.map(x => [`${x.fid}:${x.key}`, x]));
