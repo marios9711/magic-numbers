@@ -452,6 +452,70 @@ async function lineupCheck(env) {
   return { picks: picks.length, checked, waiting };
 }
 
+// --- /probe: shows the shape of the data the logger relies on (live match + an upcoming pick) ----------
+async function probe(env, fidParam) {
+  const out = {};
+  const keys = o => (o && typeof o === 'object' ? Object.keys(o).slice(0, 25) : o);
+  const count = (arr, f) => (arr || []).reduce((m, x) => { const k = f(x); m[k] = (m[k] || 0) + 1; return m; }, {});
+  // 1) a live match
+  try {
+    const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod' });
+    const live = j.data || [];
+    out.liveCount = live.length;
+    const f0 = live.find(f => clock(f)) || live[0];
+    if (f0) {
+      out.liveClock = clock(f0); out.liveScore = goals(f0, 'CURRENT');
+      const d = (await sm(env, `/football/fixtures/${f0.id}`, { include: 'participants;scores;statistics.type;inplayOdds;events;trends;league' })).data || {};
+      const s = goals(d, 'CURRENT');
+      out.live = {
+        id: d.id, league: d.league && d.league.name, teams: (d.participants || []).map(p => `${p.name} (${p.meta && p.meta.location})`),
+        scores: (d.scores || []).map(x => `${x.description}:${x.score && x.score.participant}=${x.score && x.score.goals}`),
+        eventTypes: count(d.events, e => e.type_id), eventSample: (d.events || []).slice(0, 3).map(e => ({ type_id: e.type_id, minute: e.minute, extra: e.extra_minute, result: e.result, participant_id: e.participant_id, rescinded: e.rescinded })),
+        timeline: timeline(d, s), reds: redCards(d),
+        trendTypes: count(d.trends, t => t.type_id), trendSample: (d.trends || []).slice(-3).map(t => ({ ...t })), trendKeys: keys((d.trends || [])[0]),
+        pressure: pressure(d, (clock(d) || {}).minute || 0),
+        statsTypes: (d.statistics || []).slice(0, 40).map(x => x.type && (x.type.developer_name || x.type.code)).filter(Boolean),
+        stats: statsOf(d),
+        inplayOddsN: (d.inplayodds || d.inplayOdds || []).length, inplayKeys: keys((d.inplayodds || d.inplayOdds || [])[0]),
+        inplayMarkets: count(d.inplayodds || d.inplayOdds, o => o.market_description || (o.market && o.market.name) || o.market_id),
+        inplaySample: (d.inplayodds || d.inplayOdds || []).filter(o => /goal/i.test(String(o.market_description || ''))).slice(0, 6)
+          .map(o => ({ market: o.market_description, label: o.label, name: o.name, total: o.total, value: o.value, book: o.bookmaker_id, stopped: o.stopped, suspended: o.suspended })),
+      };
+      if (s) {
+        const books = await bookNames(env);
+        out.live.overFull = overPrices(d.inplayodds || d.inplayOdds, s[0] + s[1] + 0.5, false, books).slice(0, 4);
+        out.live.overHalf = overPrices(d.inplayodds || d.inplayOdds, s[0] + s[1] + 0.5, true, books).slice(0, 4);
+      }
+    }
+  } catch (e) { out.liveError = e.message; }
+  // 2) an upcoming match (from the slip page's value board unless ?fid= is given): injuries, scorers, recent line-ups
+  try {
+    let fid = fidParam ? Number(fidParam) : null;
+    if (!fid) { const sl = await pagesJSON('slip.json'); const v = sl && (sl.slip[0] || sl.value[0]); fid = v && v.fid; }
+    if (fid) {
+      const f = (await sm(env, `/football/fixtures/${fid}`, { include: 'participants;lineups;sidelined.sideline;league' })).data || {};
+      const H = side(f, 'home');
+      out.upcoming = {
+        id: f.id, league: f.league && f.league.name, season: f.season_id, start: f.starting_at_timestamp,
+        teams: (f.participants || []).map(p => `${p.id} ${p.name} (${p.meta && p.meta.location})`),
+        lineupsN: (f.lineups || []).length, sidelinedN: (f.sidelined || []).length,
+        sidelinedSample: (f.sidelined || []).slice(0, 3).map(x => ({ keys: keys(x), sideline: x.sideline && { player_id: x.sideline.player_id, category: x.sideline.category, completed: x.sideline.completed, team_id: x.sideline.team_id } })),
+      };
+      const top = await seasonScorers(env, f.season_id);
+      out.upcoming.scorersN = top.length;
+      out.upcoming.scorersHome = top.filter(x => x.tid === H.id).sort((a, b) => b.goals - a.goals).slice(0, 3);
+      const regs = await regulars(env, H.id, f.starting_at_timestamp || Math.floor(Date.now() / 1000));
+      out.upcoming.regularsHome = regs.map(r => `${r.name} ${r.starts}/${r.of}`);
+      const j = await sm(env, `/football/fixtures/between/${ymd(Math.floor(Date.now() / 1000) - 30 * 86400)}/${ymd(Math.floor(Date.now() / 1000))}/${H.id}`, { include: 'lineups', per_page: 50 });
+      const g = (j.data || []).find(x => (x.lineups || []).length);
+      out.upcoming.recentLineupTypes = g ? count(g.lineups, l => l.type_id) : null;
+      out.upcoming.recentLineupSample = g ? g.lineups.slice(0, 2).map(l => ({ player_id: l.player_id, team_id: l.team_id, type_id: l.type_id, player_name: l.player_name, position_id: l.position_id })) : null;
+      if ((f.lineups || []).filter(l => l.type_id === 11).length >= 22) out.upcoming.check = await teamCheck(env, f, H, f.lineups.filter(l => l.type_id === 11));
+    }
+  } catch (e) { out.upcomingError = e.message; }
+  return out;
+}
+
 // Each cron run (once a minute) checks 3 times: at 0, 20 and 40 seconds.
 const CHECKS_PER_RUN = 3, CHECK_EVERY_MS = 20000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -537,6 +601,12 @@ export default {
         for (const m of msgs) sent.push(await telegram(env, m).catch(() => false));
         return new Response(JSON.stringify({ ok: true, sent }), { headers });
       }
+      if (url.pathname === '/probe') { // one-off data check: what Sportmonks sends back (at most every 5 minutes)
+        const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'probe'").first();
+        if (t && Date.now() - Number(t.v) < 300e3) return new Response(JSON.stringify({ ok: false, error: 'probe already run in the last 5 minutes' }), { headers });
+        await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('probe', ?)").bind(String(Date.now())).run();
+        return new Response(JSON.stringify(await probe(env, url.searchParams.get('fid')), null, 1), { headers });
+      }
       if (url.pathname === '/test') { // sends one Telegram test message (at most every 10 minutes)
         const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'test'").first();
         if (t && Date.now() - Number(t.v) < 600e3) return new Response(JSON.stringify({ ok: false, error: 'test already sent in the last 10 minutes' }), { headers });
@@ -550,4 +620,4 @@ export default {
   },
 };
 
-export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards };
+export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards, probe };
