@@ -126,7 +126,8 @@ async function main() {
   const mk = st.markets || { '1X2': 1, DC: 2, BTTS: 14, OU: 80, AH: null };
   const marketName = {};
   for (const [name, id] of Object.entries(mk)) if (id) marketName[id] = name;
-  const ids = Object.values(mk).filter(Boolean).join(',');
+  for (const [id, name] of Object.entries(st.marketsExtra || {})) marketName[id] = name; // more 1st-half goals markets
+  const ids = Object.keys(marketName).join(',');
   const up = S.readJSON(S.p('upcoming.json'), { fixtures: [] }).fixtures;
   const nowS = S.now(), tm = Math.floor(nowS / 60);
   const list = up.filter(f => f.ts > nowS + 300 && f.ts < nowS + AHEAD_H * 3600 && f.odds !== false).slice(0, MAX_CALLS);

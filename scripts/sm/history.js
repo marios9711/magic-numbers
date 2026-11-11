@@ -35,7 +35,7 @@ const T0 = Date.now();
   }
 
   // 2) Bookmaker and market names (once a week).
-  if (!st.metaAt || Date.now() - Date.parse(st.metaAt) > 7 * 86400e3) {
+  if (!st.metaAt || !st.marketsExtra || Date.now() - Date.parse(st.metaAt) > 7 * 86400e3) {
     try {
       for (const b of await S.all('/odds/bookmakers')) st.books[b.id] = b.name;
       const mk = await S.all('/odds/markets');
@@ -46,11 +46,17 @@ const T0 = Date.now();
         BTTS: find(/^both teams to score$/i, 14),
         OU: find(/^goals over\/under$/i, 80),
         AH: find(/^asian handicap$/i, null),
-        // 1st-half total goals (not team totals, not exact/odd-even): name varies by feed
-        HOU: (mk.find(m => /(1st|first) half/i.test(m.name || '') && /goal|over\/under/i.test(m.name || '')
-          && !/team|home|away|exact|odd|even|both|corner|card|result|handicap|draw|winner|margin|range/i.test(m.name || '')) || { id: null }).id,
       };
-      log.hou = st.markets.HOU && (mk.find(m => m.id === st.markets.HOU) || {}).name;
+      // 1st-half total goals (not team totals, not exact/odd-even). Feeds differ: plain over/under
+      // ("1st Half Goals", "1st Half Over/Under") and Asian "1st Half Goal Line". All are fetched;
+      // the plain one is preferred as the main id.
+      const half = mk.filter(m => /(1st|first) half/i.test(m.name || '') && /goal|over\/under/i.test(m.name || '')
+        && !/team|home|away|exact|odd|even|both|corner|card|result|handicap|draw|winner|margin|range|scorer|half ?time\/|interval|minute/i.test(m.name || ''));
+      half.sort((a, b) => (/line|asian/i.test(a.name) ? 1 : 0) - (/line|asian/i.test(b.name) ? 1 : 0));
+      st.markets.HOU = half.length ? half[0].id : null;
+      st.marketsExtra = Object.fromEntries(half.slice(1, 4).map(m => [m.id, 'HOU']));
+      st.marketNames = Object.fromEntries(mk.filter(m => /goal|over\/under|half/i.test(m.name || '')).slice(0, 80).map(m => [m.id, m.name]));
+      log.hou = half.map(m => `${m.id} ${m.name}`).join(' | ');
       st.metaAt = new Date(Date.now()).toISOString();
       log.books = Object.keys(st.books).length; log.markets = st.markets;
     } catch (e) { log.metaError = e.message; }
