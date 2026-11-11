@@ -15,6 +15,11 @@
 //                History (favourite = better season points, not odds): 10/13 (77%); any 1st-half
 //                equaliser 57% (12/21); equaliser after 30' 25% (2/8).
 //   PEQL  quiet  same, but the equaliser comes 31'–45'
+//   PHT   ALERT  half-time (or 46'–50') at 1-0/0-1; scoring teams (pre-match over 2.5 chance 58%+);
+//                1st half 10+ shots or 5+ corners; live over 2.5 at 1.80–2.00 -> over 2.5. The message says
+//                whether the favourite or the outsider leads. History (football-data, 8,865 HT 1-0):
+//                all 46%, scoring teams 55%, outsider leading 59%, favourite leading 54%.
+//   PHTq  quiet  same moment, one of those conditions missing (stats.miss says which)
 //   PEQW  quiet  wider: the outsider's first goal is in the first 20' but outside 7'–12', favourite
 //                equalises in the 1st half (wider history: 71% by 25', 38% after)
 // Favourite = pre-match margin-free win chance at least 20 points above the opponent's (median of
@@ -44,9 +49,12 @@ const PATTERNS = {
   PEQ: { name: 'outsider scores 7–12\', favourite equalises by 30\' → goal before HT', history: '77% (10/13)', half: true, alert: true, short: 'goal before half-time' },
   PEQL: { name: 'outsider scores 7–12\', favourite equalises 31–45\' (logged only)', history: '25% (2/8)', half: true, alert: false, short: 'goal before half-time' },
   PEQW: { name: 'outsider scores in first 20\' (not 7–12\'), favourite equalises in 1st half (logged only)', history: '71% by 25\', 38% after', half: true, alert: false, short: 'goal before half-time' },
+  PHT: { name: 'HT 1-0/0-1, scoring teams, 10+ shots or 5+ corners, live over 2.5 at 1.80–2.00 → over 2.5', history: '55% (scoring teams); outsider leading 59%, favourite leading 54%', half: false, alert: true, short: 'over 2.5', line: 2.5 },
+  PHTq: { name: 'HT 1-0/0-1, one of the conditions missing (logged only)', history: '46% (all HT 1-0)', half: false, alert: false, short: 'over 2.5', line: 2.5 },
 };
 const MIN_GAP = 5;            // goals closer together than this (minutes) don't trigger an alert
 const FAV_MARGIN = 0.20;      // favourite: pre-match win chance at least this much above the other side's
+const HT_MIN_O25 = 0.58, HT_MIN_SHOTS = 10, HT_MIN_CORNERS = 5, HT_PRICE = [1.80, 2.00]; // half-time over 2.5 rule
 const MIN_PRICE = 1.80;       // an alert whose best live price is below this is held back (logged, not sent)
 const RED_CARDS = [20, 21];   // event types: red card, second yellow
 const TREND = { 34: 'corners', 42: 'shots', 86: 'onTarget', 44: 'dangerous', 43: 'attacks' }; // trend type ids
@@ -91,9 +99,18 @@ function timeline(f, s) {
   return s && out.length === s[0] + s[1] && out.filter(g => g.side === 'h').length === s[0] ? out : null;
 }
 
-// Which pattern (if any) a live fixture is in right now. PEQ/PEQW still need the favourite check.
+// Half-time break, or the first minutes of the 2nd half (the break itself may come without a clock).
+const atHT = f => /^(HT|BREAK|INPLAY_BREAK|HALF_TIME)$/i.test(String((f.state && (f.state.developer_name || f.state.short_name || f.state.state)) || ''));
+function htWindow(f, c, s) {
+  if (!s || s[0] + s[1] !== 1) return false;
+  return atHT(f) || (c && c.period === 2 && c.minute <= 50);
+}
+
+// Which pattern (if any) a live fixture is in right now. PEQ/PEQW still need the favourite check;
+// PHT needs the pre-match prices, the 1st-half stats and the live price (checked in scan()).
 function match(f) {
   const c = clock(f), s = goals(f, 'CURRENT');
+  if (htWindow(f, c, s)) return { key: 'PHT', c: c && c.period === 2 ? c : { period: 0, minute: 45, ht: true }, s, info: {}, needHT: true };
   if (!c || !s) return null;
   const [h, a] = s, tot = h + a, lead = Math.abs(h - a);
   const tl = timeline(f, s);
@@ -133,6 +150,36 @@ async function favourite(env, fid, mk1x2) {
   const med = v => { v.sort((x, y) => x - y); const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
   const ph = med(hs), pa = med(as);
   return { fav: ph - pa >= FAV_MARGIN ? 'h' : pa - ph >= FAV_MARGIN ? 'a' : null, ph: Math.round(ph * 1000) / 1000, pa: Math.round(pa * 1000) / 1000 };
+}
+
+// Pre-match view (cached per match): favourite from 1X2 and the over 2.5 chance, margin removed per
+// bookmaker (power method for O/U is overkill here: proportional), median over bookmakers.
+async function prematch(env, fid) {
+  const k = `pm:${fid}`, row = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(k).first();
+  if (row) return JSON.parse(row.v);
+  const j = await sm(env, `/football/odds/pre-match/fixtures/${fid}`, { filters: `markets:${env.MARKET_1X2 || 1},${env.MARKET_OU || 80}` });
+  const per = {};
+  for (const o of j.data || []) {
+    const L = String(o.label || o.name || '').toLowerCase(), p = Number(o.value), b = per[o.bookmaker_id] = per[o.bookmaker_id] || {};
+    if (!(p > 1)) continue;
+    if (Number(o.market_id) === Number(env.MARKET_OU || 80)) {
+      if (Math.abs(Number(o.total) - 2.5) > 1e-9) continue;
+      if (L.startsWith('over')) b.o = 1 / p; else if (L.startsWith('under')) b.u = 1 / p;
+    } else {
+      const kk = L === '1' || L === 'home' ? 'h' : L === '2' || L === 'away' ? 'a' : L === 'x' || L === 'draw' ? 'd' : null;
+      if (kk) b[kk] = 1 / p;
+    }
+  }
+  const med = v => { if (!v.length) return null; v.sort((x, y) => x - y); const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+  const hs = [], as = [], os = [];
+  for (const b of Object.values(per)) {
+    if (b.h && b.d && b.a) { const t = b.h + b.d + b.a; hs.push(b.h / t); as.push(b.a / t); }
+    if (b.o && b.u) os.push(b.o / (b.o + b.u));
+  }
+  const ph = med(hs), pa = med(as), o25 = med(os), r3 = x => x == null ? null : Math.round(x * 1000) / 1000;
+  const out = { fav: ph == null ? null : ph - pa >= FAV_MARGIN ? 'h' : pa - ph >= FAV_MARGIN ? 'a' : null, ph: r3(ph), pa: r3(pa), o25: r3(o25), books: os.length };
+  await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(k, JSON.stringify(out)).run();
+  return out;
 }
 
 // Live "over" price for (current goals + 0.5): 1st-half market for P30, full match for P75.
@@ -235,6 +282,7 @@ async function bookNames(env) {
 // Could this live match be in one of the patterns? (score + minute only; cheap)
 function maybe(f) {
   const c = clock(f), s = goals(f, 'CURRENT');
+  if (htWindow(f, c, s)) return true;
   if (!c || !s) return false;
   const tot = s[0] + s[1], lead = Math.abs(s[0] - s[1]);
   return (c.period === 1 && c.minute >= 28 && c.minute <= 34 && tot === 2 && lead === 2)
@@ -254,7 +302,7 @@ async function inTable(env, table, col, keys, withValue) {
 // could be in a pattern, once per score (cached in the meta table as tl:<fixture>:<score>).
 async function scan(env) {
   const now = Math.floor(Date.now() / 1000);
-  const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod' });
+  const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod;state' });
   const pre = (j.data || []).filter(maybe);
   const tkey = f => { const s = goals(f, 'CURRENT'); return `tl:${f.id}:${s[0]}-${s[1]}`; };
   const cache = await inTable(env, 'meta', 'k', pre.map(tkey), true);
@@ -292,24 +340,38 @@ async function scan(env) {
         continue;
       }
     }
+    if (m.needHT) { try { m.info.pm = await prematch(env, f.id); } catch { m.info.pm = null; } }
     books = books || await bookNames(env);
     let d = f;
     try { d = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;scores;statistics.type;inplayOdds;events;trends' })).data || f; } catch { /* log without odds */ }
-    const P = PATTERNS[m.key], line = m.s[0] + m.s[1] + 0.5;
+    let P = PATTERNS[m.key];
+    const line = P.line || m.s[0] + m.s[1] + 0.5;
     const prices = overPrices(d.inplayodds || d.inplayOdds, line, P.half, books);
     const best = prices[0] || null;
     const pin = prices.find(x => /pinnacle/i.test(x.book)), b365 = prices.find(x => /bet365/i.test(x.book));
     const st = statsOf(d), reds = redCards(d), p10 = pressure(d, m.c.minute);
+    if (m.needHT) { // half-time over 2.5: every condition must hold, otherwise it is logged quietly
+      const pm = m.info.pm || {}, lead = m.s[0] > m.s[1] ? 'h' : 'a';
+      const tot = x => (x ? (Number(x.home) || 0) + (Number(x.away) || 0) : null);
+      const sh = tot(st.shots), co = tot(st.corners), miss = [];
+      if (!(pm.o25 >= HT_MIN_O25)) miss.push(pm.o25 == null ? 'no pre-match over 2.5 price' : `pre-match over 2.5 only ${Math.round(pm.o25 * 100)}%`);
+      if (!((sh != null && sh >= HT_MIN_SHOTS) || (co != null && co >= HT_MIN_CORNERS))) miss.push(`shots ${sh ?? '?'}, corners ${co ?? '?'}`);
+      if (!best || best.price < HT_PRICE[0] || best.price > HT_PRICE[1]) miss.push(best ? `price ${best.price.toFixed(2)}` : 'no live price');
+      Object.assign(m.info, { leader: pm.fav ? (pm.fav === lead ? 'favourite' : 'outsider') : 'no clear favourite', shots1: sh, corners1: co, miss: miss.length ? miss : undefined });
+      if (miss.length) { m.key = 'PHTq'; P = PATTERNS.PHTq; }
+    }
     // Alerts are held back (logged quietly) after a red card, or when the live price is too short.
     const held = !P.alert ? null : reds.length ? 'red card' : best && best.price < MIN_PRICE ? `price below ${MIN_PRICE.toFixed(2)}` : null;
+    const when = m.c.ht ? 'HT' : `${m.c.minute}'`;
     const H = side(f, 'home').name, A = side(f, 'away').name, lg = f.league ? f.league.name : '';
     const sc = `${m.s[0]}-${m.s[1]}`;
     const be = best ? `break-even ${(100 / best.price).toFixed(0)}%` : 'no live price found';
     // Short message (Marios's choice): match, score, minute, the question and the price. Everything
     // else (bookmakers, history, stats) is still stored in the log and shown on the site.
     const text = [
-      `⚽ ${esc(H)} ${sc} ${esc(A)} · ${m.c.minute}'`,
+      `⚽ ${esc(H)} ${sc} ${esc(A)} · ${when}`,
       best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : `Over ${line}${P.half ? ' (1st half)' : ''}`,
+      ...(m.needHT && m.info.leader !== 'no clear favourite' ? [`${m.info.leader === 'outsider' ? 'Outsider' : 'Favourite'} leading`] : []),
     ].join('\n');
     const sent = P.alert && !held ? await telegram(env, text).catch(() => false) : false;
     if (P.alert && !held) alerts++;
