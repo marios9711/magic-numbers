@@ -139,10 +139,12 @@ async function favourite(env, fid, mk1x2) {
 function overPrices(odds, line, half, books) {
   const out = [];
   for (const o of odds || []) {
-    const md = String(o.market_description || (o.market && o.market.name) || '');
-    if (!/over\/under|goals/i.test(md) || /team|asian|corner|card|exact|odd|even|both|range|handicap|minute|home|away/i.test(md)) continue;
-    const isHalf = /1st half|first half/i.test(md);
-    if (isHalf !== half || /2nd half|second half/i.test(md)) continue;
+    // Only whole-match / 1st-half TOTAL goals markets. Sportmonks also sends team totals named after the
+    // team ("Kawasaki Frontale Goals"), so the names are matched exactly rather than by keyword.
+    const md = String(o.market_description || (o.market && o.market.name) || '').trim();
+    const isFull = /^(match goals|alternative match goals|goals over\/under|total goals|goal line( \(\d+-\d+\))?)$/i.test(md);
+    const isHalf = /^(1st half goals|first half goals|1st half over\/under|1st half goal line( \(\d+-\d+\))?)$/i.test(md);
+    if (half ? !isHalf : !isFull) continue;
     const t = Number(String(o.total ?? o.name ?? '').split(',')[0]);
     if (Math.abs(t - line) > 1e-9 || !/^over/i.test(String(o.label || o.name)) || o.stopped || o.suspended) continue;
     const price = Number(o.value || o.dp3);
