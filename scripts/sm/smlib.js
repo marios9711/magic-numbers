@@ -59,21 +59,30 @@ async function get(endpoint, params = {}) {
 // All pages of a list endpoint (cursor pagination, falling back to page numbers).
 async function all(endpoint, params = {}, { maxPages = 200, onPage } = {}) {
   const out = [];
-  let cursor = null, page = 1;
+  let next = null, page = 1;
   for (let i = 0; i < maxPages; i++) {
-    // Sportmonks refuses per_page together with a cursor: the page size is set on the first request only.
-    const prm = { per_page: 50, ...params };
-    if (cursor) { delete prm.per_page; prm.cursor = cursor; } else if (page > 1) prm.page = page;
+    // Follow the "next_page" link Sportmonks returns (its query keeps filters/includes); else page numbers.
+    const prm = next || { per_page: 50, ...params, ...(page > 1 ? { page } : {}) };
     const j = await get(endpoint, prm);
     const data = j && j.data ? (Array.isArray(j.data) ? j.data : [j.data]) : [];
     out.push(...data);
     if (onPage) onPage(data);
     const pg = j && j.pagination;
+    if (i === 0 && pg && !seenPagination[endpoint.split('/')[2] || endpoint]) {
+      seenPagination[endpoint.split('/')[2] || endpoint] = 1;
+      console.log('pagination', endpoint, JSON.stringify(pg).slice(0, 300));
+    }
     if (!pg || !pg.has_more || !data.length) break;
-    if (pg.next_cursor) cursor = pg.next_cursor; else page++;
+    if (typeof pg.next_page === 'string' && pg.next_page.includes('?')) {
+      const q = new URL(pg.next_page).searchParams;
+      q.delete('api_token');
+      next = Object.fromEntries(q.entries());
+      if (!next.page && !next.cursor) { page++; next = null; }
+    } else { page++; next = null; }
   }
   return out;
 }
+const seenPagination = {};
 
 // --- fixtures -------------------------------------------------------------------------------
 // Compact fixture: { id, lg, sid, ts, st, h, a, hn, an, hg, ag }. Score = 90 minutes
