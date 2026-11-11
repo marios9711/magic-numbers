@@ -61,8 +61,9 @@ async function all(endpoint, params = {}, { maxPages = 200, onPage } = {}) {
   const out = [];
   let cursor = null, page = 1;
   for (let i = 0; i < maxPages; i++) {
+    // Sportmonks refuses per_page together with a cursor: the page size is set on the first request only.
     const prm = { per_page: 50, ...params };
-    if (cursor) prm.cursor = cursor; else if (page > 1) prm.page = page;
+    if (cursor) { delete prm.per_page; prm.cursor = cursor; } else if (page > 1) prm.page = page;
     const j = await get(endpoint, prm);
     const data = j && j.data ? (Array.isArray(j.data) ? j.data : [j.data]) : [];
     out.push(...data);
