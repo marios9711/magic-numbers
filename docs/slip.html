@@ -86,15 +86,35 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.id !== b.dataset.t));
 });
 
+// Line-up checks from the live logger (live.json), by pick id.
+const liveP = fetch('data/sm/live.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null);
+let LU = {};
+const luTag = p => {
+  const l = LU[p.id];
+  if (!l) return '';
+  if (l.status === 'ok') return '<div class="mot">✅ Line-ups OK</div>';
+  if (l.status === 'warn') return `<div class="mot">⚠️ Line-ups: ${esc(l.text)}</div>`;
+  return '<div class="mot">Line-ups not published in time</div>';
+};
 function pickCard(p) {
   return `<div class="pk"><div><div class="what">${esc(p.pick)}</div><div class="m">${esc(p.hn)} – ${esc(p.an)} · ${esc(p.lg)} · ${when(p.ts)}</div></div>
   <div class="odds">${p.odds.toFixed(2)}<div class="m">${esc(p.book)}</div></div>
   <div class="why">Chance ${pct(p.fair0)} (${refName(p.ref)})${p.boost ? ` + ${(p.boost * 100).toFixed(0)} pts motivation` : ''} · edge ${sgn(p.edge0)} · moved ${pts(p.move0)} pts since first seen · model ${pct(p.model)} · ${p.n} bookmakers
   ${p.clv != null ? ` · <b>later price: ${sgn(p.clv)}</b>` : ''} ${res(p)} ${p.profit != null ? eur(p.profit) : ''}
-  ${p.motText ? `<div class="mot">Table: ${esc(p.motText)}</div>` : ''}${(p.why || []).map(w => `<div class="mot">${esc(w)}</div>`).join('')}</div></div>`;
+  ${p.motText ? `<div class="mot">Table: ${esc(p.motText)}</div>` : ''}${(p.why || []).map(w => `<div class="mot">${esc(w)}</div>`).join('')}
+  ${p.warn ? `<div class="mot">⚠️ Injured/suspended: ${esc(p.warn)}</div>` : ''}${luTag(p)}</div></div>`;
+}
+// Paper results split by the warnings, to see whether they mean anything.
+function warnSplit(all) {
+  const s = all.filter(p => p.r != null), sum = a => a.reduce((t, p) => t + (p.profit || 0), 0);
+  const g = [['line-ups OK', p => (LU[p.id] || {}).status === 'ok'], ['line-up warning', p => (LU[p.id] || {}).status === 'warn'],
+    ['injury warning at pick time', p => p.warn], ['no injury warning', p => p.squad && !p.warn]];
+  return g.map(([n, f]) => { const x = s.filter(f); return `${n}: ${x.length} settled, ${x.filter(p => p.r > 0).length} won, ${eur(x.length ? sum(x) : null)}`; }).join(' · ');
 }
 
-fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
+fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null).then(async d => {
+  const L0 = await liveP;
+  for (const l of (L0 && L0.lineups) || []) LU[l.pid] = l;
   if (!d) {
     $('#meta').textContent = 'Not started yet.';
     $('#slip').innerHTML = '<div class="card empty">The daily slip starts when the Sportmonks trial is switched on (planned for 19 Nov 2026). The first slip appears after the first run that day.</div>';
@@ -136,7 +156,7 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
   for (const p of d.history) (byDay[p.day] = byDay[p.day] || []).push(p);
   const mk = Object.entries(P.byMarket).map(([m, v]) => `${esc(m)}: ${v.n} settled, ${v.won ?? '–'} won, ${eur(v.profit)}`).join(' · ');
   const br = Object.entries(P.byRule || {}).map(([m, v]) => `${esc(m)}: ${v.n} settled, ${eur(v.profit)}, beat later price ${v.clvPos == null ? '–' : pct(v.clvPos, 0)} of ${v.clvN}`).join(' · ');
-  $('#past').innerHTML = `<div class="card note">By market — ${mk}<br>Motivation — ${br}</div>` + (Object.entries(byDay).map(([day, ps]) => `<div class="card"><h2>${esc(day)}</h2>${ps.map(pickCard).join('')}</div>`).join('')
+  $('#past').innerHTML = `<div class="card note">By market — ${mk}<br>Motivation — ${br}<br>Warnings — ${warnSplit([...d.slip, ...d.history])}</div>` + (Object.entries(byDay).map(([day, ps]) => `<div class="card"><h2>${esc(day)}</h2>${ps.map(pickCard).join('')}</div>`).join('')
     || '<div class="card empty">No earlier slips yet.</div>');
 
   const M = d.modelCheck;
@@ -150,15 +170,22 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
   howText(d.settings);
 });
 
-fetch('data/sm/live.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null).then(L => {
-  const intro = `<div class="card"><h2>Live patterns (test)</h2><p class="note">Situations from live betting, checked every minute with the live price at that moment, then graded. Paper only. Alerts (sent to Telegram): <b>2-0 at 30'</b> with the two goals 5+ minutes apart → goal before half-time? <b>Two-goal lead at 70–78'</b> with the last two goals 5+ minutes apart → another goal? <b>The outsider scores first at 7–12', the favourite equalises by 30'</b> → another goal before half-time (over 2.5 1st half)? Lines marked "logged only" are the situations the rules leave out (goals close together, later equalisers, wider windows), kept for comparison. History (2,759 matches with goal minutes): 2-0 at 30' 40%, two-goal lead at 75' 49%, favourite equalises by 30' 77% (10/13), after 30' 25% (small samples). A price is worth taking only if the hit rate beats 1 ÷ price (e.g. 45% at 2.20).</p></div>`;
+function pressText(r) {
+  let st = {}; try { st = JSON.parse(r.stats || '{}'); } catch { /* old row */ }
+  const p = st.p10, bits = [];
+  if (st.held) bits.push(`held back: ${st.held}`);
+  if (p) bits.push('last 10 min ' + ['corners', 'shots', 'dangerous'].filter(k => p[k]).map(k => `${k === 'dangerous' ? 'dangerous attacks' : k} ${p[k].home ?? 0}-${p[k].away ?? 0}`).join(', '));
+  return bits.length ? `<br><small>${esc(bits.join(' · '))}</small>` : '';
+}
+liveP.then(L => {
+  const intro = `<div class="card"><h2>Live patterns (test)</h2><p class="note">Situations from live betting, checked about every 20 seconds with the live price at that moment, then graded. Paper only. Alerts (sent to Telegram): <b>2-0 at 30'</b> with the two goals 5+ minutes apart → goal before half-time? <b>Two-goal lead at 70–78'</b> with the last two goals 5+ minutes apart → another goal? <b>The outsider scores first at 7–12', the favourite equalises by 30'</b> → another goal before half-time (over 2.5 1st half)? Lines marked "logged only" are the situations the rules leave out (goals close together, later equalisers, wider windows), kept for comparison. History (2,759 matches with goal minutes): 2-0 at 30' 40%, two-goal lead at 75' 49%, favourite equalises by 30' 77% (10/13), after 30' 25% (small samples). A price is worth taking only if the hit rate beats 1 ÷ price (e.g. 45% at 2.20). An alert is held back (logged, not sent) after a red card or when the best live price is below 1.80; those are counted on their own line. Corners, shots and dangerous attacks in the last 10 minutes are stored for every situation, to test whether pressure makes the late goal more likely.</p></div>`;
   if (!L) { $('#live').innerHTML = intro + '<div class="card empty">Starts with the Sportmonks trial and the live logger (planned for 19 Nov 2026).</div>'; return; }
   const sumRows = Object.entries(L.summary || {}).map(([k, v]) => {
-    const priced = L.rows.filter(r => r.pattern === k && (r.hit === 0 || r.hit === 1) && r.best);
+    const priced = L.rows.filter(r => (r.key || r.pattern) === k && (r.hit === 0 || r.hit === 1) && r.best);
     const avg = priced.length ? priced.reduce((s, r) => s + r.best, 0) / priced.length : null;
     return `<tr><td>${esc((L.patterns[k] || {}).name || k)}</td><td class="n">${v.n}</td><td class="n">${v.settled ? pct(v.hit / v.settled) : '–'} <small>(${v.hit}/${v.settled})</small></td><td class="n">${avg ? avg.toFixed(2) : '–'}</td><td class="n">${avg ? pct(1 / avg, 0) : '–'}</td><td class="n">${eur(v.withPrice ? v.profit : null)}</td></tr>`;
   }).join('');
-  const rows = (L.rows || []).slice(0, 200).map(r => `<tr><td>${when(r.at)}<br><small>${esc(r.league)}</small></td><td>${esc(r.home)} ${esc(r.score)} ${esc(r.away)} · ${r.minute}'<br><small>${esc((L.patterns[r.pattern] || {}).name || r.pattern)}</small></td>
+  const rows = (L.rows || []).slice(0, 200).map(r => `<tr><td>${when(r.at)}<br><small>${esc(r.league)}</small></td><td>${esc(r.home)} ${esc(r.score)} ${esc(r.away)} · ${r.minute}'<br><small>${esc((L.patterns[r.key || r.pattern] || {}).name || r.pattern)}</small>${pressText(r)}</td>
     <td class="n">${r.best ? Number(r.best).toFixed(2) : '–'}<br><small>${esc(r.best_book || '')}</small></td><td>${r.hit === 1 ? '<span class="b ok">yes</span>' : r.hit === 0 ? '<span class="b no">no</span>' : r.hit === -1 ? '<span class="b">void</span>' : '<span class="b">open</span>'} <small>${esc(r.result || '')}</small></td></tr>`).join('');
   $('#live').innerHTML = intro + `<div class="card tw"><table><tr><th>Pattern</th><th class="n">Logged</th><th class="n">Next goal came</th><th class="n">Avg price</th><th class="n">Break-even</th><th class="n">Paper €10</th></tr>${sumRows || '<tr><td colspan="6" class="empty">Nothing logged yet.</td></tr>'}</table></div>
     <div class="card tw"><table><tr><th>When</th><th>Match</th><th class="n">Live price</th><th>Goal?</th></tr>${rows || '<tr><td colspan="4" class="empty">Nothing logged yet.</td></tr>'}</table></div>`;
@@ -172,6 +199,7 @@ function howText(c) {
   <p><b>Chance.</b> Each bookmaker's margin is removed (power method). Pinnacle's margin-free chance is the reference when Pinnacle prices the match; otherwise the median of all bookmakers. In our 2022–24 tests, Pinnacle's price was the best predictor we had, and beating it was the only rule that made money.</p>
   <p><b>Edge</b> = best price × chance − 1 (exchanges left out; a price more than 15% above the median is treated as an error). <b>Move</b> = how far the chance has changed since we first saw the match, in percentage points: money coming in (+) or going out (−).</p>
   <p><b>The slip</b>: per day up to ${c.caps ? `${c.caps.win} win, ${c.caps.over25} over-2.5 and ${c.caps.ht15} first-half picks` : 'a handful of picks'}, one per match, kick-off within ${c.windowH} h, odds ${c.minOdds}–${c.maxOdds}, edge at least ${pct(c.minEdgePin, 0)} against Pinnacle or ${pct(c.minEdgeCons, 0)} against the consensus, priced by ${c.minBooks}+ bookmakers, and the chance not moving against it by ${(c.maxAgainst * 100).toFixed(0)}+ points.</p>
+  <p><b>Key players.</b> When a pick is logged, the injury and suspension list is checked for the team's top three league scorers (3+ goals): the backed team for a win pick, both teams for goals picks. If one is out, the pick carries a warning (it is not dropped). About an hour before kick-off, when the official line-ups come out, the pick is checked again: a missing key scorer, or three or more regular starters (started 4 of the last 5 matches) not in the line-up, gives a ⚠️ reply to the slip message in Telegram; otherwise a ✅ line-ups OK reply. Both warnings are judged on the Past picks tab.</p>
   <p><b>Beyond the teams: motivation.</b> In the last 10 games of a season the table is read for each side: in the title/promotion race, fighting relegation, nothing left to play for, or mid-table (approximate: split seasons and play-offs are not modelled). We tested this on 35,000 matches with Pinnacle's closing prices (30 leagues, 2022–25). Two situations stood out: an away side still playing for something against a home side with nothing left (won 38.1% vs 33.1% priced; ahead in all four seasons), and two sides with nothing to play for (over 2.5 hit 61.5% vs 57.1% priced; ahead in three of four). These add a little to the market's chance (3 and 2 points). Two other situations block a pick: backing a home side with nothing left against a motivated visitor, and over 2.5 when both sides are under pressure. The rules were fixed before going live and are judged separately on the Past picks tab.</p>
   <p><b>How to judge it.</b> Wins and losses over a few weeks are mostly luck. The fast honest test is whether the price we took beats the later price (odds taken × later chance − 1 above zero) over 100+ picks. If it doesn't, no amount of winning streaks makes it real.</p>
   <p class="note">Paper betting only; no real bets are placed. Odds from Sportmonks; results are 90-minute scores.</p>`;
