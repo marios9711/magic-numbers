@@ -16,7 +16,8 @@ const T0 = Date.now();
   const log = { job: 'history' };
 
   // 1) Leagues in the plan, with their seasons (refreshed once a day).
-  if (!st.leaguesAt || Date.now() - Date.parse(st.leaguesAt) > 20 * 3600e3) {
+  // (refreshed every run: only a few calls, and picks up leagues swapped in the Sportmonks plan)
+  if (!st.leaguesAt || Date.now() - Date.parse(st.leaguesAt) > 30 * 60e3) {
     const leagues = await S.all('/football/leagues', { include: 'seasons;country' });
     for (const L of leagues) {
       const seasons = (L.seasons || []).filter(s => s.starting_at)
