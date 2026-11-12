@@ -1,11 +1,8 @@
 name: Daily slip (Sportmonks)
 
 on:
-  schedule:
-    - cron: '7 5 * * *'    # 07:07 Cyprus/Bucharest time (winter) — the day's slip
-    - cron: '7 11 * * *'   # 13:07
-    - cron: '7 16 * * *'   # 18:07
-    - cron: '7 21 * * *'   # 23:07
+  # Started by the Cloudflare live logger at 07:07, 13:07, 18:07 and 23:07 Bucharest time
+  # (GitHub's own schedule often ran hours late). Can also be started by hand.
   workflow_dispatch:
 
 permissions:
