@@ -31,6 +31,7 @@
 //   SPORTMONKS_KEY Sportmonks API token
 //   TG_TOKEN       Telegram bot token (from @BotFather)      — optional; without it nothing is sent
 //   TG_CHAT        Telegram chat id to send to              — optional
+//   GH_TOKEN       GitHub token (this repo, Actions read/write) — starts the daily slip job on time
 // HTTP:  GET /log  -> last 500 triggers as JSON (the GitHub job copies it into the repo daily)
 //        GET /test  -> one Telegram test message (at most every 10 minutes)
 //        GET /demo  -> three EXAMPLE messages in the real formats (at most every 10 minutes)
@@ -662,6 +663,31 @@ async function probe(env, fidParam) {
   return out;
 }
 
+// --- Starting the daily slip job on time ---------------------------------------------------------------
+// GitHub's own schedule often starts hours late, so the logger starts the "Daily slip (Sportmonks)"
+// workflow itself at 07:07, 13:07, 18:07 and 23:07 Bucharest time. Needs the secret GH_TOKEN: a
+// fine-grained GitHub token for this repository only, with "Actions: read and write".
+const SLIP_TIMES = ['07:07', '13:07', '18:07', '23:07'];
+async function startSlipJob(env) {
+  const r = await fetch('https://api.github.com/repos/marios9711/magic-numbers/actions/workflows/sportmonks.yml/dispatches', {
+    method: 'POST', body: JSON.stringify({ ref: 'main' }),
+    headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'magic-numbers-live' },
+  });
+  const res = { at: new Date().toISOString(), status: r.status, ok: r.status === 204 };
+  if (!res.ok) res.error = (await r.text().catch(() => '')).slice(0, 200);
+  await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('dispatch', ?)").bind(JSON.stringify(res)).run();
+  return res;
+}
+async function dispatchSlip(env) {
+  if (!env.GH_TOKEN) return null;
+  const now = new Date();
+  const hm = now.toLocaleTimeString('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' });
+  if (!SLIP_TIMES.includes(hm)) return null;
+  const r = await env.DB.prepare('INSERT OR IGNORE INTO meta (k, v) VALUES (?, ?)').bind(`dispatch:${now.toISOString().slice(0, 10)} ${hm}`, '1').run();
+  if (r && r.meta && r.meta.changes === 0) return null; // already started this slot
+  return startSlipJob(env);
+}
+
 // Each cron run (once a minute) checks 3 times: at 0, 20 and 40 seconds.
 const CHECKS_PER_RUN = 3, CHECK_EVERY_MS = 20000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -670,6 +696,7 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
   if (!env.SPORTMONKS_KEY) return { skipped: 'no SPORTMONKS_KEY' };
   await setup(env);
   const t0 = Date.now(), out = { checks: 0, live: 0, maybe: 0, candidates: 0, logged: 0, alerts: 0, errors: 0 };
+  try { const d = await dispatchSlip(env); if (d) out.dispatch = d; } catch (e) { out.dispatch = { error: e.message }; }
   for (let i = 0; i < checks; i++) {
     if (i) { const wait = t0 + i * every - Date.now(); if (wait > 0) await sleep(wait); }
     try {
@@ -751,6 +778,13 @@ export default {
         for (const m of msgs) sent.push(await telegram(env, m).catch(() => false));
         return new Response(JSON.stringify({ ok: true, sent }), { headers });
       }
+      if (url.pathname === '/dispatch') { // starts the daily slip job now, to test GH_TOKEN (at most every 10 minutes)
+        if (!env.GH_TOKEN) return new Response(JSON.stringify({ ok: false, error: 'GH_TOKEN secret is not set' }), { headers });
+        const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'dispatchTest'").first();
+        if (t && Date.now() - Number(t.v) < 600e3) return new Response(JSON.stringify({ ok: false, error: 'already started in the last 10 minutes' }), { headers });
+        await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('dispatchTest', ?)").bind(String(Date.now())).run();
+        return new Response(JSON.stringify(await startSlipJob(env)), { headers });
+      }
       if (url.pathname === '/probe') { // one-off data check: what Sportmonks sends back (at most every 5 minutes)
         const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'probe'").first();
         if (t && Date.now() - Number(t.v) < 300e3) return new Response(JSON.stringify({ ok: false, error: 'probe already run in the last 5 minutes' }), { headers });
@@ -765,7 +799,8 @@ export default {
         return new Response(JSON.stringify({ ok: true, sent, sportmonksKey: !!env.SPORTMONKS_KEY, telegram: !!(env.TG_TOKEN && env.TG_CHAT) }), { headers });
       }
       const last = await env.DB.prepare("SELECT v FROM meta WHERE k = 'last'").first();
-      return new Response(JSON.stringify({ ok: true, last: last ? JSON.parse(last.v) : null }), { headers });
+      const disp = await env.DB.prepare("SELECT v FROM meta WHERE k = 'dispatch'").first();
+      return new Response(JSON.stringify({ ok: true, last: last ? JSON.parse(last.v) : null, slipJob: env.GH_TOKEN ? (disp ? JSON.parse(disp.v) : 'token set, not used yet') : 'no GH_TOKEN' }), { headers });
     } catch (e) { return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500, headers }); }
   },
 };
