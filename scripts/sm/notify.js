@@ -45,6 +45,9 @@ async function send(text) {
     for (const p of fresh) { sentP.add(p.id); if (mid) msgIds[p.id] = mid; }
   }
 
+  // Results the live logger already sent (it grades slip picks every 2 minutes) are not repeated here.
+  const live = S.readJSON(S.p('../../docs/data/sm/live.json'), {});
+  for (const r of live.slipres || []) if (r.sent) sentR.add(r.pid);
   const graded = picks.filter(p => p.r != null && !sentR.has(p.id));
   if (graded.length) {
     const lines = ['📊 <b>Results</b>'];
