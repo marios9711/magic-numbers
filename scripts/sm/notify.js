@@ -6,6 +6,9 @@ const S = require('./smlib');
 const TOKEN = process.env.TG_TOKEN, CHAT = process.env.TG_CHAT;
 const NAMES = { win: 'Win', over25: 'Over 2.5', ht15: '1st-half over 1.5' };
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+// Night games (Marios, 12 Nov): kick-off from 22:00 to 09:00 Cyprus time gets a 🌙 mark, since he can't
+// follow the line-up check or late prices then. They are still sent and still count in the test.
+const night = ts => { const h = Number(new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Asia/Nicosia', hour: '2-digit', hour12: false })) % 24; return h >= 22 || h < 9; };
 const time = ts => new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Europe/Bucharest', weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
 async function send(text) {
@@ -37,7 +40,7 @@ async function send(text) {
       lines.push(`\n<b>${NAMES[g]}</b>`);
       for (const p of ps) {
         // Short format (Marios's choice): match, pick and price only. Details stay on the site.
-        lines.push(`• ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`
+        lines.push(`${night(p.ts) ? '🌙' : '•'} ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`
           + (p.warn ? `\n   ⚠️ ${esc(p.warn)}` : ''));
       }
     }
