@@ -262,6 +262,7 @@ async function setup(env) {
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)').run();
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS lineups (
     pid TEXT PRIMARY KEY, fid INTEGER, ts INTEGER, at INTEGER, status TEXT, text TEXT, info TEXT, sent INTEGER)`).run();
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS slipres (pid TEXT PRIMARY KEY, fid INTEGER, at INTEGER, hit INTEGER, result TEXT, sent INTEGER)').run();
 }
 
 async function bookNames(env) {
@@ -508,6 +509,56 @@ async function teamCheck(env, f, team, xi) {
     missTop: missTop.map(x => ({ name: x.name, goals: x.goals, rank: x.rank })), missReg: missReg.map(x => x.name) };
 }
 
+// --- Results for the daily slip -------------------------------------------------------------------
+// The GitHub job only runs a few times a day (and GitHub often starts it hours late), so the logger
+// grades slip picks itself every 2 minutes and replies to the slip message with ✅/❌:
+//   wins on goals are sent the moment the line is passed; everything else at half-time (1st-half
+//   picks) or full time. Stored in D1 table `slipres`; the GitHub job skips the ones sent here.
+function slipOutcome(key, f) {
+  const state = f.state ? (f.state.developer_name || f.state.state || '') : '';
+  const done = FINISHED.test(state), ft = goals(f, '2ND_HALF') || goals(f, 'CURRENT'), cur = goals(f, 'CURRENT'), ht = goals(f, '1ST_HALF');
+  const c = clock(f), inFirst = c && c.period === 1 && !atHT(f);
+  if (DEAD.test(state)) return { hit: -1, result: `void (${state})` };
+  if (key === 'HO1.5') {
+    if (inFirst && cur && cur[0] + cur[1] > 1.5) return { hit: 1, result: `${cur[0]}-${cur[1]} at ${c.minute}'` };
+    if (!inFirst && ht && (done || atHT(f) || (c && c.period === 2))) return { hit: ht[0] + ht[1] > 1.5 ? 1 : 0, result: `HT ${ht[0]}-${ht[1]}` };
+    return null;
+  }
+  if (key === 'O2.5' && !done && cur && cur[0] + cur[1] > 2.5) return { hit: 1, result: `${cur[0]}-${cur[1]}${c ? ` at ${c.minute}'` : ''}` };
+  if (!done || !ft) return null;
+  const [h, a] = ft;
+  const hit = key === '1' ? (h > a ? 1 : 0) : key === '2' ? (a > h ? 1 : 0) : key === 'O2.5' ? (h + a > 2.5 ? 1 : 0) : null;
+  return hit == null ? null : { hit, result: `FT ${h}-${a}` };
+}
+
+async function slipResults(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const slip = await pagesJSON('slip.json');
+  if (!slip) return { picks: 0 };
+  const picks = [...(slip.slip || []), ...(slip.history || [])].filter(p => p.ts < now && p.ts > now - 2 * 86400 && p.r == null);
+  if (!picks.length) return { picks: 0 };
+  const done = await inTable(env, 'slipres', 'pid', picks.map(p => p.id));
+  const todo = picks.filter(p => !done.has(p.id)).slice(0, 40);
+  if (!todo.length) return { picks: picks.length, graded: 0 };
+  const j = await sm(env, `/football/fixtures/multi/${[...new Set(todo.map(p => p.fid))].join(',')}`, { include: 'scores;state;currentPeriod' });
+  const byId = Object.fromEntries((j.data || []).map(f => [f.id, f]));
+  let msgs = null, graded = 0;
+  for (const p of todo) {
+    const f = byId[p.fid];
+    let o = f ? slipOutcome(p.key, f) : null;
+    if (!o && now - p.ts > 6 * 3600) o = { hit: -1, result: 'void (no result)' };
+    if (!o) continue;
+    msgs = msgs || await pagesJSON('tgmsg.json') || {};
+    const text = o.hit < 0 ? `➖ ${esc(p.hn)} – ${esc(p.an)}: ${esc(p.pick)} (${esc(o.result)})` : `${o.hit ? '✅' : '❌'} ${esc(p.hn)} – ${esc(p.an)}: ${esc(p.pick)} (${esc(o.result)})`;
+    const r = await env.DB.prepare('INSERT OR IGNORE INTO slipres (pid, fid, at, hit, result, sent) VALUES (?, ?, ?, ?, ?, 0)').bind(p.id, p.fid, now, o.hit, o.result).run();
+    if (r && r.meta && r.meta.changes === 0) continue;
+    const sent = await telegram(env, text, msgs[p.id]).catch(() => false);
+    await env.DB.prepare('UPDATE slipres SET sent = ? WHERE pid = ?').bind(sent ? 1 : 0, p.id).run();
+    graded++;
+  }
+  return { picks: picks.length, graded };
+}
+
 // Runs every 2 minutes; does the full check for at most one pick per run (subrequest limits).
 async function lineupCheck(env) {
   const now = Math.floor(Date.now() / 1000);
@@ -632,6 +683,7 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
   }
   if (new Date(t0).getUTCMinutes() % 2 === 1) {
     try { out.settled = await settle(env); } catch (e) { out.settleError = e.message; }
+    try { out.slip = await slipResults(env); } catch (e) { out.slip = { error: e.message }; }
   }
   if (new Date(t0).getUTCMinutes() % 10 === 0) {
     // forget cached goal timelines older than 6 hours
@@ -658,7 +710,8 @@ async function summary(env) {
   }
   const last = await env.DB.prepare("SELECT v FROM meta WHERE k = 'last'").first();
   const lineups = (await env.DB.prepare('SELECT * FROM lineups ORDER BY ts DESC LIMIT 400').all()).results || [];
-  return { at: new Date().toISOString(), lineups, last: last ? JSON.parse(last.v) : null, patterns: pats, summary: by, rows };
+  const slipres = (await env.DB.prepare('SELECT * FROM slipres ORDER BY at DESC LIMIT 400').all()).results || [];
+  return { at: new Date().toISOString(), lineups, slipres, last: last ? JSON.parse(last.v) : null, patterns: pats, summary: by, rows };
 }
 
 export default {
@@ -717,4 +770,4 @@ export default {
   },
 };
 
-export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards, probe };
+export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards, probe, slipResults };
