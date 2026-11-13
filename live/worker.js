@@ -350,7 +350,9 @@ async function scan(env) {
         continue;
       }
     }
-    if (m.needHT) { try { m.info.pm = await prematch(env, f.id); } catch { m.info.pm = null; } }
+    // Pre-match view for every situation (cached per match): favourite and the over 2.5 chance, so we can
+    // later test whether "scoring teams" matter for the 2-0 and late-lead alerts too (Marios, 13 Nov).
+    if (!m.info.pm) { try { m.info.pm = await prematch(env, f.id); } catch { m.info.pm = null; } }
     books = books || await bookNames(env);
     let d = f;
     try { d = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;scores;statistics.type;inplayOdds;events;trends' })).data || f; } catch { /* log without odds */ }
