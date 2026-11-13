@@ -98,7 +98,7 @@ const luTag = p => {
 };
 function pickCard(p) {
   return `<div class="pk"><div><div class="what">${esc(p.pick)}</div><div class="m">${esc(p.hn)} – ${esc(p.an)} · ${esc(p.lg)} · ${when(p.ts)}</div></div>
-  <div class="odds">${p.odds.toFixed(2)}<div class="m">${esc(p.book)}</div></div>
+  <div class="odds">${p.odds.toFixed(2)}<div class="m">${esc(p.book)}</div>${p.minOdds ? `<div class="m">take at ${p.minOdds.toFixed(2)}+ · bet365 ${p.b365 ? p.b365.toFixed(2) + (p.b365 >= p.minOdds ? ' ✓' : ' ✗') : '–'}</div>` : ''}</div>
   <div class="why">Chance ${pct(p.fair0)} (${refName(p.ref)})${p.boost ? ` + ${(p.boost * 100).toFixed(0)} pts motivation` : ''} · edge ${sgn(p.edge0)} · moved ${pts(p.move0)} pts since first seen · model ${pct(p.model)} · ${p.n} bookmakers
   ${p.clv != null ? ` · <b>later price: ${sgn(p.clv)}</b>` : ''} ${res(p)} ${p.profit != null ? eur(p.profit) : ''}
   ${p.motText ? `<div class="mot">Table: ${esc(p.motText)}</div>` : ''}${(p.why || []).map(w => `<div class="mot">${esc(w)}</div>`).join('')}
