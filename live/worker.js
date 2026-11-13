@@ -31,6 +31,7 @@
 //   SPORTMONKS_KEY Sportmonks API token
 //   TG_TOKEN       Telegram bot token (from @BotFather)      — optional; without it nothing is sent
 //   TG_CHAT        Telegram chat id to send to              — optional
+//   TG_LIVE_CHAT   Telegram chat for live alerts (a group) — optional; else TG_CHAT
 //   GH_TOKEN       GitHub token (this repo, Actions read/write) — starts the daily slip job on time
 // HTTP:  GET /log  -> last 500 triggers as JSON (the GitHub job copies it into the repo daily)
 //        GET /test  -> one Telegram test message (at most every 10 minutes)
@@ -244,9 +245,13 @@ function pressure(f, minute) {
   return Object.keys(out).length ? out : null;
 }
 
-async function telegram(env, text, replyTo) {
-  if (!env.TG_TOKEN || !env.TG_CHAT) return false;
-  const body = { chat_id: env.TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true };
+// Two chats (Marios, 13 Nov): the slip chat (TG_CHAT: picks, line-ups, slip results) and the live chat
+// (TG_LIVE_CHAT: live alerts and their results). Without TG_LIVE_CHAT everything goes to TG_CHAT.
+const liveChat = env => env.TG_LIVE_CHAT || env.TG_CHAT;
+async function telegram(env, text, replyTo, chat) {
+  chat = chat || env.TG_CHAT;
+  if (!env.TG_TOKEN || !chat) return false;
+  const body = { chat_id: chat, text, parse_mode: 'HTML', disable_web_page_preview: true };
   if (replyTo) body.reply_parameters = { message_id: Number(replyTo), allow_sending_without_reply: true };
   const r = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/sendMessage`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -263,6 +268,7 @@ async function setup(env) {
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)').run();
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS lineups (
     pid TEXT PRIMARY KEY, fid INTEGER, ts INTEGER, at INTEGER, status TEXT, text TEXT, info TEXT, sent INTEGER)`).run();
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS expcheck (id TEXT PRIMARY KEY, pid TEXT, kind TEXT, at INTEGER, ts INTEGER, has_exp INTEGER, status TEXT, text TEXT, info TEXT, sent INTEGER)').run();
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS slipres (pid TEXT PRIMARY KEY, fid INTEGER, at INTEGER, hit INTEGER, result TEXT, sent INTEGER)').run();
 }
 
@@ -378,7 +384,7 @@ async function scan(env) {
       best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : `Over ${line}${P.half ? ' (1st half)' : ''}`,
       ...(m.needHT && m.info.leader !== 'no clear favourite' ? [`${m.info.leader === 'outsider' ? 'Outsider' : 'Favourite'} leading`] : []),
     ].join('\n');
-    const sent = P.alert && !held ? await telegram(env, text).catch(() => false) : false;
+    const sent = P.alert && !held ? await telegram(env, text, null, liveChat(env)).catch(() => false) : false;
     if (P.alert && !held) alerts++;
     await env.DB.prepare(`INSERT OR IGNORE INTO triggers (id, fid, pattern, at, minute, score, league, home, away, line, best, best_book, prices, stats, sent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -396,7 +402,7 @@ async function grade(env, t, hit, result) {
   const r = await env.DB.prepare('UPDATE triggers SET hit = ?, result = ?, settled_at = ? WHERE id = ? AND hit IS NULL').bind(hit, result, now, t.id).run();
   if (r && r.meta && r.meta.changes === 0) return; // already graded by an overlapping run
   const P = PATTERNS[t.pattern] || {};
-  if (hit >= 0 && P.alert && t.sent !== -1) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`).catch(() => {});
+  if (hit >= 0 && P.alert && t.sent !== -1) await telegram(env, `${hit ? '✅' : '❌'} ${esc(t.home)} – ${esc(t.away)}: ${esc(P.short)} (${esc(result)})`, null, liveChat(env)).catch(() => {});
 }
 
 // Grade open triggers straight from the live list (every check, ~20 s): an over bet is won the moment
@@ -462,6 +468,7 @@ async function settle(env) {
 const PAGES = 'https://marios9711.github.io/magic-numbers/data/sm';
 const LU_TOP = 3, LU_MIN_GOALS = 3, LU_MAX_REG_MISSING = 2, LU_RECENT = 5;
 const ymd = ts => new Date(ts * 1000).toISOString().slice(0, 10);
+const dayTime = ts => new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Europe/Bucharest', weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const hhmm = ts => new Date(ts * 1000).toLocaleTimeString('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' });
 const pname = l => l.player_name || (l.player && (l.player.display_name || l.player.common_name || l.player.name)) || `#${l.player_id}`;
 const short = n => { const w = String(n).trim().split(/\s+/); return w.length > 1 ? `${w[0][0]}. ${w.slice(1).join(' ')}` : String(n); };
@@ -551,7 +558,7 @@ async function slipResults(env) {
     if (!o && now - p.ts > 6 * 3600) o = { hit: -1, result: 'void (no result)' };
     if (!o) continue;
     msgs = msgs || await pagesJSON('tgmsg.json') || {};
-    const text = o.hit < 0 ? `➖ ${esc(p.hn)} – ${esc(p.an)}: ${esc(p.pick)} (${esc(o.result)})` : `${o.hit ? '✅' : '❌'} ${esc(p.hn)} – ${esc(p.an)}: ${esc(p.pick)} (${esc(o.result)})`;
+    const text = `${o.hit < 0 ? '➖' : o.hit ? '✅' : '❌'} <b>Result</b> · ${esc(p.hn)} – ${esc(p.an)}: ${esc(p.pick)} (${esc(o.result)})`;
     const r = await env.DB.prepare('INSERT OR IGNORE INTO slipres (pid, fid, at, hit, result, sent) VALUES (?, ?, ?, ?, ?, 0)').bind(p.id, p.fid, now, o.hit, o.result).run();
     if (r && r.meta && r.meta.changes === 0) continue;
     const sent = await telegram(env, text, msgs[p.id]).catch(() => false);
@@ -559,6 +566,64 @@ async function slipResults(env) {
     graded++;
   }
   return { picks: picks.length, graded };
+}
+
+// --- Expected line-ups (Sportmonks add-on) and the 21:30 night check ---------------------------------
+// Night picks (kick-off 22:00–09:00 Cyprus time) get a "🌙 Night check" reply at 21:30–22:00: expected
+// line-up (type 77614 = predicted starter) checked like the official one, or, when there is no expected
+// line-up yet, only injured/suspended top scorers. Every other pick gets the same check quietly about
+// 3 hours before kick-off, so we can see over the trial how early and how well expected line-ups work.
+// Stored in D1 table `expcheck`; the line-up check later records how many predicted starters started.
+const EXP_STARTER = 77614;
+const isNight = ts => { const h = Number(new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Asia/Nicosia', hour: '2-digit', hour12: false })) % 24; return h >= 22 || h < 9; };
+async function expectedView(env, p) {
+  const f = (await sm(env, `/football/fixtures/${p.fid}`, { include: 'participants;expectedLineups;sidelined.sideline' })).data;
+  if (!f) return null;
+  const H = side(f, 'home'), A = side(f, 'away'), sides = p.key === '1' ? [H] : p.key === '2' ? [A] : [H, A];
+  const exp = (f.expectedlineups || f.expectedLineups || []).filter(l => l.type_id === EXP_STARTER);
+  const hasExp = sides.every(t => exp.filter(l => l.team_id === t.id).length >= 11);
+  const out = new Set((f.sidelined || []).filter(x => !(x.sideline && x.sideline.completed === true)).map(x => (x.sideline && x.sideline.player_id) || x.player_id));
+  const res = [];
+  for (const t of sides) {
+    if (hasExp) { res.push(await teamCheck(env, f, t, exp)); continue; }
+    let scorers = [];
+    try { scorers = (await seasonScorers(env, f.season_id)).filter(x => x.tid === t.id && x.goals >= LU_MIN_GOALS).sort((a, b) => b.goals - a.goals).slice(0, LU_TOP); } catch { /* none */ }
+    const miss = scorers.map((x, i) => ({ ...x, rank: i + 1 })).filter(x => out.has(x.pid));
+    res.push({ team: t.name, warn: miss.length > 0, text: miss.map(x => `${short(x.name)} (${x.rank === 1 ? 'top scorer, ' : ''}${x.goals} goals, injured/suspended)`).join(', '), injuriesOnly: true });
+  }
+  return { hasExp, expN: exp.length, res, expIds: exp.map(l => l.player_id) };
+}
+async function expectedChecks(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const hm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' });
+  const nightWindow = hm >= '21:30' && hm <= '21:59';
+  const slip = await pagesJSON('slip.json');
+  if (!slip) return null;
+  const all = [...(slip.slip || []), ...(slip.history || [])].filter(p => p.ts > now);
+  const night = nightWindow ? all.filter(p => isNight(p.ts) && p.ts < now + 12 * 3600).map(p => ({ p, kind: 'night' })) : [];
+  const pre = all.filter(p => !isNight(p.ts) && p.ts > now + 150 * 60 && p.ts < now + 210 * 60).map(p => ({ p, kind: 'pre' }));
+  const cand = [...night, ...pre];
+  if (!cand.length) return null;
+  const done = await inTable(env, 'expcheck', 'id', cand.map(x => `${x.p.id}:${x.kind}`));
+  const next = cand.find(x => !done.has(`${x.p.id}:${x.kind}`));
+  if (!next) return { done: cand.length };
+  const { p, kind } = next;
+  const v = await expectedView(env, p);
+  if (!v) return { error: 'no fixture' };
+  const warn = v.res.some(r => r.warn);
+  let sent = 0, text = v.res.filter(r => r.warn).map(r => `${r.team} without ${r.text}`).join(' · ');
+  if (kind === 'night') {
+    const pk = `${esc(p.pick)} @ <b>${Number(p.odds).toFixed(2)}</b>`;
+    const lines = [`🌙 <b>Night check</b> · ${esc(p.hn)} – ${esc(p.an)} · ${dayTime(p.ts)}`,
+      warn ? `⚠️ ${pk}` : `✅ ${pk} — ${v.hasExp ? 'expected line-up looks fine' : 'no key scorer injured or suspended'}`,
+      ...v.res.filter(r => r.warn).map(r => `${esc(r.team)} without ${esc(r.text)}`),
+      v.hasExp ? '<i>Based on the expected line-up; the official one comes about 1 hour before kick-off.</i>' : '<i>No expected line-up yet: injuries and suspensions only.</i>'];
+    const msgs = await pagesJSON('tgmsg.json') || {};
+    sent = await telegram(env, lines.join('\n'), msgs[p.id]).catch(() => false) ? 1 : 0;
+  }
+  await env.DB.prepare('INSERT OR REPLACE INTO expcheck (id, pid, kind, at, ts, has_exp, status, text, info, sent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(`${p.id}:${kind}`, p.id, kind, now, p.ts, v.hasExp ? 1 : 0, warn ? 'warn' : 'ok', text, JSON.stringify({ expN: v.expN, expIds: v.expIds, res: v.res }), sent).run();
+  return { pid: p.id, kind, hasExp: v.hasExp, warn };
 }
 
 // Runs every 2 minutes; does the full check for at most one pick per run (subrequest limits).
@@ -588,14 +653,24 @@ async function lineupCheck(env) {
     const res = [];
     for (const t of sides) res.push(await teamCheck(env, f, t, xi));
     const warn = res.some(r => r.warn);
-    const head = `${esc(p.hn)} – ${esc(p.an)} · ${hhmm(p.ts)}`, pk = `${esc(p.pick)} @ <b>${Number(p.odds).toFixed(2)}</b>`;
+    const head = `📋 <b>Line-ups</b> · ${esc(p.hn)} – ${esc(p.an)} · ${dayTime(p.ts)}`, pk = `${esc(p.pick)} @ <b>${Number(p.odds).toFixed(2)}</b>`;
     const lines = warn
-      ? [`⚠️ ${head}`, pk, ...res.filter(r => r.warn).map(r => `${esc(r.team)} without ${esc(r.text)}`)]
-      : [`✅ ${head}`, `${pk} — line-ups OK`];
+      ? [head, `⚠️ ${pk}`, ...res.filter(r => r.warn).map(r => `${esc(r.team)} without ${esc(r.text)}`)]
+      : [head, `✅ ${pk} — line-ups OK`];
+    // How good was the expected line-up? (compared with the official one, for the sides that matter)
+    let expMatch = null;
+    try {
+      const ec = (await env.DB.prepare("SELECT info FROM expcheck WHERE pid = ? AND has_exp = 1 ORDER BY at DESC LIMIT 1").bind(p.id).first());
+      if (ec) {
+        const exp = new Set(JSON.parse(ec.info).expIds || []), sideIds = new Set(sides.map(t => t.id));
+        const real = xi.filter(l => sideIds.has(l.team_id));
+        expMatch = { starters: real.length, predicted: real.filter(l => exp.has(l.player_id)).length };
+      }
+    } catch { /* no expected line-up stored */ }
     msgs = msgs || await pagesJSON('tgmsg.json') || {};
     const sent = await telegram(env, lines.join('\n'), msgs[p.id]).catch(() => false);
     await env.DB.prepare('INSERT OR REPLACE INTO lineups (pid, fid, ts, at, status, text, info, sent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(p.id, p.fid, p.ts, now, warn ? 'warn' : 'ok', lines.slice(2).join(' · '), JSON.stringify(res), sent ? 1 : 0).run();
+      .bind(p.id, p.fid, p.ts, now, warn ? 'warn' : 'ok', lines.slice(2).join(' · '), JSON.stringify({ res, expMatch }), sent ? 1 : 0).run();
   }
   return { picks: picks.length, checked, waiting };
 }
@@ -708,6 +783,7 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
   }
   if (new Date(t0).getUTCMinutes() % 2 === 0) {
     try { out.lineups = await lineupCheck(env); } catch (e) { out.lineups = { error: e.message }; }
+    try { const x = await expectedChecks(env); if (x) out.expected = x; } catch (e) { out.expected = { error: e.message }; }
   }
   if (new Date(t0).getUTCMinutes() % 2 === 1) {
     try { out.settled = await settle(env); } catch (e) { out.settleError = e.message; }
@@ -739,7 +815,8 @@ async function summary(env) {
   const last = await env.DB.prepare("SELECT v FROM meta WHERE k = 'last'").first();
   const lineups = (await env.DB.prepare('SELECT * FROM lineups ORDER BY ts DESC LIMIT 400').all()).results || [];
   const slipres = (await env.DB.prepare('SELECT * FROM slipres ORDER BY at DESC LIMIT 400').all()).results || [];
-  return { at: new Date().toISOString(), lineups, slipres, last: last ? JSON.parse(last.v) : null, patterns: pats, summary: by, rows };
+  const expcheck = (await env.DB.prepare('SELECT id, pid, kind, at, ts, has_exp, status, text, sent FROM expcheck ORDER BY at DESC LIMIT 400').all()).results || [];
+  return { at: new Date().toISOString(), lineups, slipres, expcheck, last: last ? JSON.parse(last.v) : null, patterns: pats, summary: by, rows };
 }
 
 export default {
@@ -779,6 +856,13 @@ export default {
         for (const m of msgs) sent.push(await telegram(env, m).catch(() => false));
         return new Response(JSON.stringify({ ok: true, sent }), { headers });
       }
+      if (url.pathname === '/chats') { // chats the bot has been added to (to find a group's id)
+        const r = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/getUpdates?allowed_updates=${encodeURIComponent('["message","my_chat_member"]')}`);
+        const j = await r.json().catch(() => ({}));
+        const chats = {};
+        for (const u of j.result || []) { const c = (u.message || u.my_chat_member || {}).chat; if (c) chats[c.id] = { id: c.id, type: c.type, title: c.title || c.first_name || '' }; }
+        return new Response(JSON.stringify({ ok: !!j.ok, chats: Object.values(chats), liveChatSet: !!env.TG_LIVE_CHAT }), { headers });
+      }
       if (url.pathname === '/dispatch') { // starts the daily slip job now, to test GH_TOKEN (at most every 10 minutes)
         if (!env.GH_TOKEN) return new Response(JSON.stringify({ ok: false, error: 'GH_TOKEN secret is not set' }), { headers });
         const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'dispatchTest'").first();
@@ -806,4 +890,4 @@ export default {
   },
 };
 
-export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards, probe, slipResults };
+export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards, probe, slipResults, expectedChecks };
