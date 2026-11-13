@@ -365,7 +365,8 @@ async function scan(env) {
       if (miss.length) { m.key = 'PHTq'; P = PATTERNS.PHTq; }
     }
     // Alerts are held back (logged quietly) after a red card, or when the live price is too short.
-    const held = !P.alert ? null : reds.length ? 'red card' : best && best.price < MIN_PRICE ? `price below ${MIN_PRICE.toFixed(2)}` : null;
+    // (no live price: e.g. national-team games, where Sportmonks has no in-play odds)
+    const held = !P.alert ? null : reds.length ? 'red card' : !best ? 'no live price' : best.price < MIN_PRICE ? `price below ${MIN_PRICE.toFixed(2)}` : null;
     const when = m.c.ht ? 'HT' : `${m.c.minute}'`;
     const H = side(f, 'home').name, A = side(f, 'away').name, lg = f.league ? f.league.name : '';
     const sc = `${m.s[0]}-${m.s[1]}`;
@@ -725,7 +726,7 @@ async function summary(env) {
   const by = {};
   // alerts held back (red card, short price) are counted on their own line
   const pats = { ...PATTERNS };
-  for (const [k, P] of Object.entries(PATTERNS)) if (P.alert) pats[`${k}:held`] = { ...P, alert: false, name: `${P.name} — held back (red card or price below ${MIN_PRICE.toFixed(2)})` };
+  for (const [k, P] of Object.entries(PATTERNS)) if (P.alert) pats[`${k}:held`] = { ...P, alert: false, name: `${P.name} — held back (red card, no live price or price below ${MIN_PRICE.toFixed(2)})` };
   for (const r of rows) {
     r.key = r.sent === -1 ? `${r.pattern}:held` : r.pattern;
     const b = by[r.key] = by[r.key] || { n: 0, settled: 0, hit: 0, withPrice: 0, profit: 0 };
