@@ -32,17 +32,17 @@ async function send(text) {
 
   const fresh = picks.filter(p => !sentP.has(p.id) && p.ts > S.now()).sort((a, b) => a.ts - b.ts);
   if (fresh.length) {
-    const day = new Date(fresh[0].day + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    const lines = [`🧾 <b>Daily slip ${esc(day)}</b>`];
-    for (const g of Object.keys(NAMES)) {
-      const ps = fresh.filter(p => p.grp === g);
-      if (!ps.length) continue;
-      lines.push(`\n<b>${NAMES[g]}</b>`);
-      for (const p of ps) {
-        // Short format (Marios's choice): match, pick and price only. Details stay on the site.
-        lines.push(`${night(p.ts) ? '🌙' : '•'} ${time(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`
-          + (p.warn ? `\n   ⚠️ ${esc(p.warn)}` : ''));
-      }
+    // Grouped by match day (Marios, 13 Nov: a slip sent today can hold tomorrow's games), in kick-off order.
+    const dayOf = ts => new Date(ts * 1000).toLocaleDateString('en-GB', { timeZone: 'Europe/Bucharest', weekday: 'short', day: 'numeric', month: 'short' });
+    const hm = ts => new Date(ts * 1000).toLocaleTimeString('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' });
+    const lines = [`🧾 <b>Slip</b> · ${fresh.length} new pick${fresh.length > 1 ? 's' : ''}`];
+    let lastDay = null;
+    for (const p of fresh) {
+      const d = dayOf(p.ts);
+      if (d !== lastDay) { lines.push(`\n📅 <b>${esc(d)}</b>`); lastDay = d; }
+      // Short format (Marios's choice): match, pick and price only. Details stay on the site.
+      lines.push(`${night(p.ts) ? '🌙' : '•'} ${hm(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`
+        + (p.warn ? `\n   ⚠️ ${esc(p.warn)}` : ''));
     }
     const mid = await send(lines.join('\n'));
     for (const p of fresh) { sentP.add(p.id); if (mid) msgIds[p.id] = mid; }
