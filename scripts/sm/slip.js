@@ -96,7 +96,13 @@ const isFamous = L => !!L && (/champions league|europa league|conference league/
       const firstB = o.b[0];
       const rules = CFG.keys[key] ? Mot.rulesFor(th, ta, key) : [];
       const boost = rules.reduce((s, r) => s + (r.boost || 0), 0);
+      // Marios bets only at bet365 and at the OPAP shop (no price feed): show bet365's price and the
+      // minimum price worth taking (the same edge the pick needs), so he can compare at either.
+      const b365id = Object.keys(o.tr || {}).find(id => /bet365/i.test(books[id] || ''));
+      const b365 = b365id && last(o.tr[b365id]) && last(o.tr[b365id])[0] === lastSnap ? last(o.tr[b365id])[1] : null;
+      const minOdds = Math.ceil(((1 + (pinNow ? CFG.minEdgePin : CFG.minEdgeCons)) / (fair + boost)) * 100) / 100;
       sel.push({
+        b365, minOdds,
         fid: rec.id, lg: rec.lg, ts: rec.ts, hn: rec.hn, an: rec.an, key, mk: S.marketOf(key), grp: CFG.keys[key] || null,
         odds: b[1], book: books[b[2]] || `#${b[2]}`, ref: pinNow ? 'pin' : 'cons', fair,
         edge: b[1] * (fair + boost) - 1, edgeMkt: b[1] * fair - 1, boost, block: rules.some(r => r.block),
@@ -126,7 +132,7 @@ const isFamous = L => !!L && (/champions league|europa league|conference league/
     if (have.has(id) || usedFixtures.has(c.fid)) continue;
     log.picks.push({
       id, day: today, at: nowS, fid: c.fid, lg: c.lg, ts: c.ts, hn: c.hn, an: c.an, key: c.key, mk: c.mk, grp: c.grp,
-      odds: c.odds, book: c.book, ref: c.ref, fair0: r3(c.fair), edge0: r3(c.edge), edgeMkt: r3(c.edgeMkt), boost: c.boost || undefined,
+      odds: c.odds, book: c.book, b365: c.b365 || undefined, minOdds: c.minOdds, ref: c.ref, fair0: r3(c.fair), edge0: r3(c.edge), edgeMkt: r3(c.edgeMkt), boost: c.boost || undefined,
       rules: c.rules.length ? c.rules : undefined, mot: c.mot, move0: r3(c.move), model: r3(c.model), n: c.n,
     });
     have.add(id); usedFixtures.add(c.fid); count[c.grp] = (count[c.grp] || 0) + 1;

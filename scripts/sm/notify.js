@@ -41,7 +41,11 @@ async function send(text) {
       const d = dayOf(p.ts);
       if (d !== lastDay) { lines.push(`\n📅 <b>${esc(d)}</b>`); lastDay = d; }
       // Short format (Marios's choice): match, pick and price only. Details stay on the site.
-      lines.push(`${night(p.ts) ? '🌙' : '•'} ${hm(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} @ <b>${p.odds.toFixed(2)}</b>`
+      // Price line (Marios, 13 Nov: he bets at bet365 and the OPAP shop): the minimum price worth taking,
+      // and bet365's price with ✓ when it is enough. Older picks without minOdds show the best price.
+      const b = p.b365 ? `bet365 ${p.b365.toFixed(2)} ${p.b365 >= p.minOdds ? '✓' : '✗'}` : 'not on bet365';
+      const price = p.minOdds ? `take at <b>${p.minOdds.toFixed(2)}+</b> · ${b}` : `@ <b>${p.odds.toFixed(2)}</b>`;
+      lines.push(`${night(p.ts) ? '🌙' : '•'} ${hm(p.ts)} ${esc(p.hn)} – ${esc(p.an)}\n   ${esc(S.label(p.key, p.hn, p.an))} · ${price}`
         + (p.warn ? `\n   ⚠️ ${esc(p.warn)}` : ''));
     }
     const mid = await send(lines.join('\n'));
