@@ -15,7 +15,7 @@
 //                History (favourite = better season points, not odds): 10/13 (77%); any 1st-half
 //                equaliser 57% (12/21); equaliser after 30' 25% (2/8).
 //   PEQL  quiet  same, but the equaliser comes 31'–45'
-//   PHT   ALERT  half-time (or 46'–50') at 1-0/0-1; scoring teams (pre-match over 2.5 chance 58%+);
+//   PHT   ALERT  half-time (or 46'–50') at 1-0/0-1; scoring teams (pre-match over 2.5 chance 60%+);
 //                1st half 10+ shots or 5+ corners; live over 2.5 at 1.80–2.00 -> over 2.5. The message says
 //                whether the favourite or the outsider leads. History (football-data, 8,865 HT 1-0):
 //                all 46%, scoring teams 55%, outsider leading 59%, favourite leading 54%.
@@ -56,8 +56,16 @@ const PATTERNS = {
 };
 const MIN_GAP = 5;            // goals closer together than this (minutes) don't trigger an alert
 const FAV_MARGIN = 0.20;      // favourite: pre-match win chance at least this much above the other side's
-const HT_MIN_O25 = 0.58, HT_MIN_SHOTS = 10, HT_MIN_CORNERS = 5, HT_PRICE = [1.80, 2.00]; // half-time over 2.5 rule
+const HT_MIN_O25 = 0.60, HT_MIN_SHOTS = 10, HT_MIN_CORNERS = 5, HT_PRICE = [1.80, 2.00]; // half-time over 2.5 rule
 const MIN_PRICE = 1.80;       // an alert whose best live price is below this is held back (logged, not sent)
+// Stricter filters (Marios, 15 Nov: too many alerts at the same time, most of them lost). On the 173
+// situations logged 11–14 Nov: kept 58% won, filtered out 40%.
+//   - late lead (P75): not when the pre-match favourite is the team in front (26% won, 5/19)
+//   - P30 and P75: the game must still be lively: 3+ shots or 2+ corners in the last 10 minutes
+//   - PHT: pre-match over 2.5 chance 60%+ (was 58%)
+//   - at most MAX_ALERTS alerts in any ALERT_WINDOW seconds; the liveliest games go first
+const LIVELY_SHOTS = 3, LIVELY_CORNERS = 2;
+const MAX_ALERTS = 2, ALERT_WINDOW = 15 * 60;
 const RED_CARDS = [20, 21];   // event types: red card, second yellow
 const TREND = { 34: 'corners', 42: 'shots', 86: 'onTarget', 44: 'dangerous', 43: 'attacks' }; // trend type ids
 const FINISHED = /^(FT|AET|FT_PEN|AWARDED)$/;
@@ -336,6 +344,7 @@ async function scan(env) {
   const done = await inTable(env, 'triggers', 'id', ids);
   const checked = await inTable(env, 'meta', 'k', ids.map(id => `checked:${id}`));
   let books = null, logged = 0, alerts = 0;
+  const queue = [];
   for (const { f, m } of live) {
     const id = `${f.id}:${m.key}`;
     if (done.has(id)) continue;
@@ -374,7 +383,13 @@ async function scan(env) {
     }
     // Alerts are held back (logged quietly) after a red card, or when the live price is too short.
     // (no live price: e.g. national-team games, where Sportmonks has no in-play odds)
-    const held = !P.alert ? null : reds.length ? 'red card' : !best ? 'no live price' : best.price < MIN_PRICE ? `price below ${MIN_PRICE.toFixed(2)}` : null;
+    const tot10 = k => (p10 && p10[k] ? (Number(p10[k].home) || 0) + (Number(p10[k].away) || 0) : 0);
+    const lively = tot10('shots') >= LIVELY_SHOTS || tot10('corners') >= LIVELY_CORNERS;
+    const pmv = m.info.pm || {}, leadSide = m.s[0] > m.s[1] ? 'h' : 'a';
+    const held = !P.alert ? null : reds.length ? 'red card' : !best ? 'no live price' : best.price < MIN_PRICE ? `price below ${MIN_PRICE.toFixed(2)}`
+      : (m.key === 'P75' && pmv.fav && pmv.fav === leadSide) ? 'favourite in front'
+      : ((m.key === 'P30' || m.key === 'P75') && !lively) ? `quiet last 10' (${tot10('shots')} shots, ${tot10('corners')} corners)`
+      : null;
     const when = m.c.ht ? 'HT' : `${m.c.minute}'`;
     const H = side(f, 'home').name, A = side(f, 'away').name, lg = f.league ? f.league.name : '';
     const sc = `${m.s[0]}-${m.s[1]}`;
@@ -386,16 +401,33 @@ async function scan(env) {
       best ? `Over ${line}${P.half ? ' (1st half)' : ''} @ <b>${best.price.toFixed(2)}</b>` : `Over ${line}${P.half ? ' (1st half)' : ''}`,
       ...(m.needHT && m.info.leader !== 'no clear favourite' ? [`${m.info.leader === 'outsider' ? 'Outsider' : 'Favourite'} leading`] : []),
     ].join('\n');
-    const sent = P.alert && !held ? await telegram(env, text, null, liveChat(env)).catch(() => false) : false;
-    if (P.alert && !held) alerts++;
+    const row = { id, f, m, now, sc, lg, H, A, line, best, prices, st, reds, p10, held, text, score: tot10('shots') + tot10('corners') };
+    if (P.alert && !held) { queue.push(row); continue; } // sent (or held as busy) after the loop, liveliest first
+    await logTrigger(env, row, held ? -1 : 0);
+    logged++;
+  }
+  // At most MAX_ALERTS alerts in any ALERT_WINDOW: count those already sent, then send the liveliest.
+  if (queue.length) {
+    const recent = (await env.DB.prepare('SELECT COUNT(*) AS n FROM triggers WHERE sent = 1 AND at > ?').bind(now - ALERT_WINDOW).first()) || {};
+    let room = Math.max(0, MAX_ALERTS - (Number(recent.n) || 0));
+    queue.sort((a, b) => b.score - a.score);
+    for (const row of queue) {
+      if (room <= 0) row.held = `busy: ${MAX_ALERTS} alerts in ${ALERT_WINDOW / 60} min`;
+      const sent = row.held ? false : await telegram(env, row.text, null, liveChat(env)).catch(() => false);
+      if (!row.held) { room--; alerts++; }
+      await logTrigger(env, row, row.held ? -1 : sent ? 1 : 0);
+      logged++;
+    }
+  }
+  return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts, graded };
+}
+
+async function logTrigger(env, { id, f, m, now, sc, lg, H, A, line, best, prices, st, reds, p10, held }, sent) {
     await env.DB.prepare(`INSERT OR IGNORE INTO triggers (id, fid, pattern, at, minute, score, league, home, away, line, best, best_book, prices, stats, sent)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(id, f.id, m.key, now, m.c.minute, sc, lg, H, A, line, best ? best.price : null, best ? best.book : null,
         JSON.stringify(prices.slice(0, 8)), JSON.stringify({ ...st, ...m.info, reds: reds.length ? reds : undefined, p10: p10 || undefined, held: held || undefined }),
-        held ? -1 : sent ? 1 : 0).run();
-    logged++;
-  }
-  return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts, graded };
+        sent).run();
 }
 
 // Store a result and send ✅/❌ for alerts that were sent.
@@ -804,7 +836,7 @@ async function summary(env) {
   const by = {};
   // alerts held back (red card, short price) are counted on their own line
   const pats = { ...PATTERNS };
-  for (const [k, P] of Object.entries(PATTERNS)) if (P.alert) pats[`${k}:held`] = { ...P, alert: false, name: `${P.name} — held back (red card, no live price or price below ${MIN_PRICE.toFixed(2)})` };
+  for (const [k, P] of Object.entries(PATTERNS)) if (P.alert) pats[`${k}:held`] = { ...P, alert: false, name: `${P.name} — held back (red card, no/short live price, favourite in front, quiet last 10', or busy)` };
   for (const r of rows) {
     r.key = r.sent === -1 ? `${r.pattern}:held` : r.pattern;
     const b = by[r.key] = by[r.key] || { n: 0, settled: 0, hit: 0, withPrice: 0, profit: 0 };
