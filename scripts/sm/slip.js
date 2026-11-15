@@ -123,23 +123,39 @@ const isFamous = L => !!L && (/champions league|europa league|conference league/
   const ok = x => x.live && x.grp && !x.block && !(CFG.skipFamous && x.famous)
     && x.ts > nowS + CFG.minLeadMin * 60 && x.ts < nowS + CFG.windowH * 3600
     && x.odds >= CFG.odds[x.grp][0] && x.odds <= CFG.odds[x.grp][1] && x.n >= CFG.minBooks
-    && x.edge >= (x.ref === 'pin' ? CFG.minEdgePin : CFG.minEdgeCons) && x.move > -CFG.maxAgainst;
+    && x.edge >= (x.ref === 'pin' ? CFG.minEdgePin : CFG.minEdgeCons) && x.move > -CFG.maxAgainst
+    // Stricter (Marios, 15 Nov, after Vila Nova and Grosseto lost on 14 Nov):
+    // - the motivation bonus can only add to a pick that is already good: the price must beat the
+    //   market's own chance by the minimum edge without it
+    // - our model must agree: its chance must be at least what the price needs (1 / price).
+    //   (first 15 picks: model agreed 4/8 won, +€31; model disagreed 2/7 won, −€30)
+    && x.edgeMkt >= (x.ref === 'pin' ? CFG.minEdgePin : CFG.minEdgeCons)
+    && x.model != null && x.model >= 1 / x.odds;
   const cands = sel.filter(ok).sort((a, b) => b.edge - a.edge);
   const fresh = [];
   for (const c of cands) {
     if ((count[c.grp] || 0) >= CFG.caps[c.grp]) continue;
     const id = `${c.fid}:${c.key}`;
     if (have.has(id) || usedFixtures.has(c.fid)) continue;
+    // An away win pick whose top scorer is injured or suspended is left off (Marios, 15 Nov: Grosseto).
+    let q = null;
+    if (c.key === '2') {
+      try { q = await Squad.check({ fid: c.fid, key: c.key }); } catch (e) { console.log('squad check failed', id, e.message); }
+      if (q && q.out.some(x => x.rank === 1)) { console.log('skipped (top scorer out):', c.hn, '-', c.an, q.warn); continue; }
+    }
     log.picks.push({
       id, day: today, at: nowS, fid: c.fid, lg: c.lg, ts: c.ts, hn: c.hn, an: c.an, key: c.key, mk: c.mk, grp: c.grp,
       odds: c.odds, book: c.book, b365: c.b365 || undefined, minOdds: c.minOdds, ref: c.ref, fair0: r3(c.fair), edge0: r3(c.edge), edgeMkt: r3(c.edgeMkt), boost: c.boost || undefined,
       rules: c.rules.length ? c.rules : undefined, mot: c.mot, move0: r3(c.move), model: r3(c.model), n: c.n,
     });
     have.add(id); usedFixtures.add(c.fid); count[c.grp] = (count[c.grp] || 0) + 1;
-    fresh.push(log.picks[log.picks.length - 1]);
+    const pk = log.picks[log.picks.length - 1];
+    if (q) { pk.out = q.out.length ? q.out : undefined; pk.warn = q.warn || undefined; pk.squad = 1; }
+    fresh.push(pk);
   }
   // Injuries/suspensions of key scorers for the new picks (a warning only; the pick stays).
   for (const pk of fresh) {
+    if (pk.squad) continue; // already checked above
     try { const q = await Squad.check(pk); if (q) { pk.out = q.out.length ? q.out : undefined; pk.warn = q.warn || undefined; pk.squad = 1; } }
     catch (e) { console.log('squad check failed', pk.id, e.message); }
   }
