@@ -105,6 +105,28 @@ function pickCard(p) {
   ${p.warn ? `<div class="mot">⚠️ Injured/suspended: ${esc(p.warn)}</div>` : ''}${luTag(p)}</div></div>`;
 }
 // Paper results split by the warnings, to see whether they mean anything.
+// Weeks and months (Marios, 16 Nov): judge the system by week and month, not by day. Slip picks and
+// sent live alerts, €10 paper stake each, by kick-off / alert date (Cyprus time). Weeks start on Monday.
+function periodTable(slipAll, L) {
+  const cy = ts => new Date(new Date(ts * 1000).toLocaleString('en-US', { timeZone: 'Asia/Nicosia' }));
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const wk = ts => { const d = cy(ts); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return `Week of ${ymd(d)}`; };
+  const mo = ts => cy(ts).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+  const items = [];
+  const seen = new Set();
+  for (const p of slipAll) if (p.r != null && p.r !== 0 && !seen.has(p.id)) { seen.add(p.id); items.push({ ts: p.ts, k: 'slip', won: p.r > 0, profit: p.profit || 0 }); }
+  for (const r of (L && L.rows) || []) if (r.sent === 1 && (r.hit === 0 || r.hit === 1) && r.best) items.push({ ts: r.at, k: 'live', won: r.hit === 1, profit: r.hit ? (r.best - 1) * 10 : -10 });
+  const table = (title, keyOf) => {
+    const g = {};
+    for (const x of items) { const k = keyOf(x.ts); (g[k] = g[k] || { first: x.ts, slip: [], live: [] })[x.k].push(x); g[k].first = Math.min(g[k].first, x.ts); }
+    const cell = a => a.length ? `${a.filter(x => x.won).length}/${a.length} won · ${eur(a.reduce((t, x) => t + x.profit, 0))}` : '–';
+    const rows = Object.entries(g).sort((a, b) => b[1].first - a[1].first).map(([k, v]) =>
+      `<tr><td>${esc(k)}</td><td class="n">${cell(v.slip)}</td><td class="n">${cell(v.live)}</td><td class="n"><b>${eur([...v.slip, ...v.live].reduce((t, x) => t + x.profit, 0))}</b></td></tr>`).join('');
+    return `<h2>${title}</h2><table><tr><th></th><th class="n">Slip</th><th class="n">Live alerts</th><th class="n">Total</th></tr>${rows || '<tr><td colspan="4" class="empty">No results yet.</td></tr>'}</table>`;
+  };
+  return `<div class="card">${table('By month', mo)}<div style="height:12px"></div>${table('By week', wk)}
+    <p class="note">€10 paper stake per pick or alert. Live alerts count only when a live price was found. A good system still loses or breaks even on most single days; judge it by weeks and months.</p></div>`;
+}
 function warnSplit(all) {
   const s = all.filter(p => p.r != null), sum = a => a.reduce((t, p) => t + (p.profit || 0), 0);
   const g = [['line-ups OK', p => (LU[p.id] || {}).status === 'ok'], ['line-up warning', p => (LU[p.id] || {}).status === 'warn'],
@@ -156,12 +178,12 @@ fetch('data/sm/slip.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : nu
   for (const p of d.history) (byDay[p.day] = byDay[p.day] || []).push(p);
   const mk = Object.entries(P.byMarket).map(([m, v]) => `${esc(m)}: ${v.n} settled, ${v.won ?? '–'} won, ${eur(v.profit)}`).join(' · ');
   const br = Object.entries(P.byRule || {}).map(([m, v]) => `${esc(m)}: ${v.n} settled, ${eur(v.profit)}, beat later price ${v.clvPos == null ? '–' : pct(v.clvPos, 0)} of ${v.clvN}`).join(' · ');
-  $('#past').innerHTML = `<div class="card note">By market — ${mk}<br>Motivation — ${br}<br>Warnings — ${warnSplit([...d.slip, ...d.history])}</div>` + (Object.entries(byDay).map(([day, ps]) => `<div class="card"><h2>${esc(day)}</h2>${ps.map(pickCard).join('')}</div>`).join('')
+  $('#past').innerHTML = periodTable([...d.slip, ...d.history], L0) + `<div class="card note">By market — ${mk}<br>Motivation — ${br}<br>Warnings — ${warnSplit([...d.slip, ...d.history])}</div>` + (Object.entries(byDay).map(([day, ps]) => `<div class="card"><h2>${esc(day)}</h2>${ps.map(pickCard).join('')}</div>`).join('')
     || '<div class="card empty">No earlier slips yet.</div>');
 
   const M = d.modelCheck;
   $('#model').innerHTML = `<div class="card"><h2>Does the goals model know anything?</h2>
-    <p class="note">Log loss on 1X2 for settled matches, using each side's chances from before kick-off (lower is better). The model is only shown as a second opinion and is not used to choose picks unless it gets close to the market.</p>
+    <p class="note">Log loss on 1X2 for settled matches, using each side's chances from before kick-off (lower is better). Since 15 Nov the model also has to agree with a pick: its chance must be at least what the price needs.</p>
     <table><tr><th>Compared on</th><th class="n">Matches</th><th class="n">Model</th><th class="n">Market</th></tr>
     <tr><td>All bookmakers' consensus</td><td class="n">${M.n}</td><td class="n">${M.model ?? '–'}</td><td class="n">${M.consensus ?? '–'}</td></tr>
     <tr><td>Pinnacle</td><td class="n">${M.nPin}</td><td class="n">${M.modelVsPin ?? '–'}</td><td class="n">${M.pinnacle ?? '–'}</td></tr></table></div>
