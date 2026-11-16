@@ -11,10 +11,11 @@ const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&
 const night = ts => { const h = Number(new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Asia/Nicosia', hour: '2-digit', hour12: false })) % 24; return h >= 22 || h < 9; };
 const time = ts => new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Europe/Bucharest', weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
-async function send(text) {
+async function send(text, replyTo) {
   const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    body: JSON.stringify({ chat_id: CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true,
+      ...(replyTo ? { reply_to_message_id: replyTo, allow_sending_without_reply: true } : {}) }),
   });
   if (!r.ok) throw new Error(`Telegram ${r.status}`);
   const j = await r.json().catch(() => ({}));
@@ -25,7 +26,7 @@ async function send(text) {
   if (!TOKEN || !CHAT) { console.log('notify.js: TG_TOKEN / TG_CHAT not set — skipping.'); return; }
   const picks = S.readJSON(S.p('picks.json'), { picks: [] }).picks;
   const done = S.readJSON(S.p('notified.json'), { picks: [], results: [] });
-  const sentP = new Set(done.picks), sentR = new Set(done.results);
+  const sentP = new Set(done.picks), sentR = new Set(done.results), sentS = new Set(done.skips || []);
   // Telegram message id of the slip message each pick was in (the live logger replies to it with
   // the line-up check). Published with the site so the logger can read it.
   const msgFile = S.p('../../docs/data/sm/tgmsg.json'), msgIds = S.readJSON(msgFile, {});
@@ -52,6 +53,19 @@ async function send(text) {
     for (const p of fresh) { sentP.add(p.id); if (mid) msgIds[p.id] = mid; }
   }
 
+  // Skip warning (Marios, 16 Nov, after Crotone): if, before kick-off, the sharp market's chance for a
+  // pick has dropped by SKIP_DROP or more since it was picked, a "❌ skip" reply goes to the slip message.
+  // On the first 21 picks, those that later moved against won 1 of 5 (−€19).
+  const SKIP_DROP = 0.03;
+  for (const p of picks) {
+    if (sentS.has(p.id) || !sentP.has(p.id) || p.ts <= S.now() || p.fairL == null || p.fair0 == null) continue;
+    if (p.fairL - p.fair0 > -SKIP_DROP) continue;
+    const pc = x => `${Math.round(x * 100)}%`;
+    await send(`❌ <b>Skip</b> · ${esc(p.hn)} – ${esc(p.an)}\n${esc(S.label(p.key, p.hn, p.an))}: the market moved against it `
+      + `(chance ${pc(p.fair0)} → ${pc(p.fairL)}${p.oddsL ? `, price now ${p.oddsL.toFixed(2)}` : ''})`, msgIds[p.id]).catch(e => console.log('skip msg failed', e.message));
+    sentS.add(p.id);
+  }
+
   // Results the live logger already sent (it grades slip picks every 2 minutes) are not repeated here.
   const live = S.readJSON(S.p('../../docs/data/sm/live.json'), {});
   for (const r of live.slipres || []) if (r.sent) sentR.add(r.pid);
@@ -67,6 +81,6 @@ async function send(text) {
   }
 
   S.writeJSON(msgFile, Object.fromEntries(Object.entries(msgIds).slice(-500)));
-  S.writeJSON(S.p('notified.json'), { picks: [...sentP].slice(-3000), results: [...sentR].slice(-3000) });
+  S.writeJSON(S.p('notified.json'), { picks: [...sentP].slice(-3000), results: [...sentR].slice(-3000), skips: [...sentS].slice(-3000) });
   console.log('notify.js', JSON.stringify({ newPicks: fresh.length, results: graded.length }));
 })().catch(e => { console.error('notify.js failed:', e.message); process.exitCode = 1; });

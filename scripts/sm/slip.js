@@ -20,7 +20,8 @@ const Squad = require('./squad');
 const CFG = {
   keys: { 1: 'win', 2: 'win', 'O2.5': 'over25', 'HO1.5': 'ht15' },
   caps: { win: 4, over25: 4, ht15: 4 },
-  windowH: 36, minLeadMin: 30, minEdgePin: 0.02, minEdgeCons: 0.04,
+  windowH: 24, // was 36 (Marios, 16 Nov: picks made 24h+ ahead won 2 of 6; more time for news to move the price)
+  minLeadMin: 30, minEdgePin: 0.02, minEdgeCons: 0.04,
   // price range per market (Marios, 11 Nov): no short favourites or very likely overs
   odds: { win: [1.70, 3.50], over25: [1.80, 2.40], ht15: [2.00, 4.00] },
   minBooks: 4, maxAgainst: 0.03, skipFamous: true,
