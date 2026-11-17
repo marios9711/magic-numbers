@@ -497,7 +497,8 @@ async function settle(env) {
 // pick, both teams for goals picks. Key players:
 //   scorers  – the team's top 3 league scorers this season with 3+ goals
 //   regulars – started at least 4 of the team's last 5 matches (n-1 of n when fewer, at least 3)
-// Warning when a key scorer doesn't start, or 3+ regulars don't. Everything is stored (table
+// Warning (narrowed 17 Nov) when the top scorer doesn't start, or 3+ key players don't (regulars plus
+// the 2nd/3rd scorers). Everything is stored (table
 // `lineups`) so warned and OK picks can be compared on the results.
 const PAGES = 'https://marios9711.github.io/magic-numbers/data/sm';
 const LU_TOP = 3, LU_MIN_GOALS = 3, LU_MAX_REG_MISSING = 2, LU_RECENT = 5;
@@ -545,7 +546,7 @@ async function teamCheck(env, f, team, xi) {
   try { regs = await regulars(env, team.id, f.starting_at_timestamp); } catch { /* no recent line-ups */ }
   const missTop = scorers.map((x, i) => ({ ...x, rank: i + 1 })).filter(x => !started.has(x.pid));
   const missReg = regs.filter(x => !started.has(x.pid) && !missTop.some(y => y.pid === x.pid));
-  const warn = missTop.length > 0 || missReg.length > LU_MAX_REG_MISSING;
+  const warn = missTop.some(x => x.rank === 1) || missReg.length + missTop.filter(x => x.rank > 1).length > LU_MAX_REG_MISSING;
   const bits = missTop.map(x => `${short(x.name)} (${x.rank === 1 ? 'top scorer, ' : ''}${x.goals} goals)`);
   if (missReg.length) bits.push(`${missReg.length} regular starter${missReg.length > 1 ? 's' : ''} (${missReg.slice(0, 3).map(x => short(x.name)).join(', ')}${missReg.length > 3 ? '…' : ''})`);
   return { team: team.name, warn, text: bits.filter(Boolean).join(', '), scorers: scorers.length, regulars: regs.length,
