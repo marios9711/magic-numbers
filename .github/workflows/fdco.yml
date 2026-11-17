@@ -2,7 +2,7 @@ name: Backup source (football-data.co.uk)
 
 on:
   schedule:
-    - cron: '47 6 * * *'   # 08:47 Cyprus time (winter)
+    - cron: '17 4 * * *'   # 06:17 Cyprus time (winter); early so GitHub's delays still land before kick-offs
     - cron: '47 16 * * *'  # 18:47 Cyprus time
   workflow_dispatch:
 
