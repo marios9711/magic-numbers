@@ -1,0 +1,76 @@
+name: Daily slip (API-Football)
+
+on:
+  # Started by the Cloudflare live logger at 07:07, 13:07, 18:07 and 23:07 Bucharest time
+  # (GitHub's own schedule often runs hours late). Can also be started by hand.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: af
+  cancel-in-progress: false
+
+env:
+  SRC: af
+  SM_DIR: data/af
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Check the API-Football key
+        id: key
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+        run: |
+          if [ -z "$APIFOOTBALL_KEY" ]; then echo "on=no" >> "$GITHUB_OUTPUT"; echo "No APIFOOTBALL_KEY secret — nothing to do."; else echo "on=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Results and upcoming fixtures
+        if: steps.key.outputs.on == 'yes'
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+        run: node scripts/af/results.js
+      - name: Odds snapshot (all bookmakers, today + 2 days)
+        if: steps.key.outputs.on == 'yes'
+        timeout-minutes: 15
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+        run: node scripts/af/odds.js || echo "odds.js failed — slip uses the previous snapshot"
+      - name: Bookmakers, league types and past seasons (until all downloaded)
+        if: steps.key.outputs.on == 'yes'
+        timeout-minutes: 20
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+        run: node scripts/af/history.js || echo "history.js failed — carries on next run"
+      - name: Build the slip
+        if: steps.key.outputs.on == 'yes'
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+        run: node scripts/sm/slip.js
+      - name: Copy the live pattern log (Cloudflare worker)
+        if: steps.key.outputs.on == 'yes'
+        env:
+          LIVE_LOG_URL: ${{ secrets.LIVE_LOG_URL }}
+        run: |
+                    if [ -n "$LIVE_LOG_URL" ]; then curl -fsS "$LIVE_LOG_URL/log" -o docs/data/sm/live.json || echo "live log not reachable"; else echo "No LIVE_LOG_URL secret."; fi
+      - name: Telegram (new picks and results)
+        if: steps.key.outputs.on == 'yes'
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+        run: node scripts/sm/notify.js || echo "Telegram message failed"
+      - name: Save
+        if: steps.key.outputs.on == 'yes'
+        run: |
+          git config user.name "magic-numbers-bot"
+          git config user.email "actions@users.noreply.github.com"
+          for d in data/af docs/data/sm; do if [ -d "$d" ]; then git add "$d"; fi; done
+          git diff --cached --quiet || git commit -m "Daily slip update (API-Football) $(date -u +%F\ %H:%M)"
+          git pull --rebase
+          git push
