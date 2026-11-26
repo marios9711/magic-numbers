@@ -4,6 +4,8 @@
 // The pick itself is kept: whether warned picks really do worse is judged on the results.
 // Sides that matter: the backed team for a win pick, both teams for goals picks.
 const S = require('./smlib');
+// API-Football (SRC=af): same check from /players/topscorers and /injuries (scripts/af/squad.js).
+if (process.env.SRC === 'af') { module.exports = require('../af/squad'); return; }
 
 const TOP = 3, MIN_GOALS = 3;
 const cache = {};

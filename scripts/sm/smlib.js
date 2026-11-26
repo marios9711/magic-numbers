@@ -5,7 +5,9 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const DIR = path.join(ROOT, 'data/sm');
+// SM_DIR=data/af: the same slip runs on API-Football data (scripts/af/*), kept apart from the Sportmonks
+// data. Published files stay at docs/data/sm (slip.js / notify.js write '../../docs/data/sm/...').
+const DIR = path.join(ROOT, process.env.SM_DIR || 'data/sm');
 const BASE = 'https://api.sportmonks.com/v3';
 const KEY = process.env.SPORTMONKS_KEY;
 const MOCK = process.env.SM_MOCK; // test only: path to a module that fakes the API
@@ -23,8 +25,8 @@ function writeJSON(file, data) {
 const p = rel => path.join(DIR, rel);
 
 function needKey(name) {
-  if (KEY || MOCK) return true;
-  console.log(`${name}: SPORTMONKS_KEY secret is not set — skipping (nothing changed).`);
+  if (KEY || MOCK || (process.env.SRC === 'af' && process.env.APIFOOTBALL_KEY)) return true;
+  console.log(`${name}: ${process.env.SRC === 'af' ? 'APIFOOTBALL_KEY' : 'SPORTMONKS_KEY'} secret is not set — skipping (nothing changed).`);
   return false;
 }
 
