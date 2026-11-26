@@ -1,6 +1,7 @@
 // Magic Numbers — live pattern logger (Cloudflare Worker, cron every minute).
 //
-// Watches every live match in the Sportmonks plan (checked 3 times a minute: every ~20 seconds) and
+// Data: API-Football (moved from Sportmonks on 26 Nov 2026; Sportmonks trial ended 25 Nov).
+// Watches every live match (checked twice a minute: every ~30 seconds) and
 // logs pre-set situations from Marios's
 // live-betting experience, with the live price at that moment, then the result. Only the ALERT
 // patterns (Marios's rules) go to Telegram; the others are logged quietly so the rules can be
@@ -28,7 +29,7 @@
 //
 // Bindings / secrets (set in the Cloudflare dashboard, never in this file):
 //   DB             D1 database
-//   SPORTMONKS_KEY Sportmonks API token
+//   APIFOOTBALL_KEY API-Football key (Pro plan)
 //   TG_TOKEN       Telegram bot token (from @BotFather)      — optional; without it nothing is sent
 //   TG_CHAT        Telegram chat id to send to              — optional
 //   TG_LIVE_CHAT   Telegram chat for live alerts (a group) — optional; else TG_CHAT
@@ -42,7 +43,6 @@
 // price is below MIN_PRICE. For every trigger the last-10-minute pressure (corners, shots, dangerous
 // attacks per side) is stored, to test later whether pressure improves the late-goal alert.
 
-const BASE = 'https://api.sportmonks.com/v3';
 const PATTERNS = {
   P30: { name: '2-0 at 30\', goals 5+ min apart → goal before HT', history: '40% (all 2-0 at 30\')', half: true, alert: true, short: 'goal before half-time' },
   P30c: { name: '2-0 at 30\', goals close together (logged only)', history: '41% (gap < 5\')', half: true, alert: false, short: 'goal before half-time' },
@@ -70,13 +70,6 @@ const RED_CARDS = [20, 21];   // event types: red card, second yellow
 const TREND = { 34: 'corners', 42: 'shots', 86: 'onTarget', 44: 'dangerous', 43: 'attacks' }; // trend type ids
 const FINISHED = /^(FT|AET|FT_PEN|AWARDED)$/;
 const DEAD = /CANC|POSTP|ABAN|DELETED|SUSP|INTERRUPTED/;
-
-async function sm(env, path, params = {}) {
-  const q = new URLSearchParams(params).toString();
-  const r = await fetch(`${BASE}${path}${q ? '?' + q : ''}`, { headers: { Authorization: env.SPORTMONKS_KEY, Accept: 'application/json' } });
-  if (!r.ok) throw new Error(`Sportmonks ${r.status} ${path}`);
-  return r.json();
-}
 
 const side = (f, loc) => (f.participants || []).find(p => p.meta && p.meta.location === loc) || {};
 function goals(f, desc) {
@@ -146,9 +139,8 @@ function match(f) {
 
 // Pre-match favourite ('h', 'a' or null) from 1X2 prices, margin removed per bookmaker, median.
 async function favourite(env, fid, mk1x2) {
-  const j = await sm(env, `/football/odds/pre-match/fixtures/${fid}`, { filters: `markets:${mk1x2}` });
   const per = {};
-  for (const o of j.data || []) {
+  for (const o of (await prematchRows(env, fid)).filter(o => Number(o.market_id) === Number(mk1x2))) {
     const L = String(o.label || o.name || '').toLowerCase();
     const k = L === '1' || L === 'home' ? 'h' : L === '2' || L === 'away' ? 'a' : L === 'x' || L === 'draw' ? 'd' : null;
     const p = Number(o.value);
@@ -167,12 +159,11 @@ async function favourite(env, fid, mk1x2) {
 async function prematch(env, fid) {
   const k = `pm:${fid}`, row = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(k).first();
   if (row) return JSON.parse(row.v);
-  const j = await sm(env, `/football/odds/pre-match/fixtures/${fid}`, { filters: `markets:${env.MARKET_1X2 || 1},${env.MARKET_OU || 80}` });
   const per = {};
-  for (const o of j.data || []) {
+  for (const o of await prematchRows(env, fid)) {
     const L = String(o.label || o.name || '').toLowerCase(), p = Number(o.value), b = per[o.bookmaker_id] = per[o.bookmaker_id] || {};
     if (!(p > 1)) continue;
-    if (Number(o.market_id) === Number(env.MARKET_OU || 80)) {
+    if (Number(o.market_id) === Number(env.MARKET_OU || 5)) {
       if (Math.abs(Number(o.total) - 2.5) > 1e-9) continue;
       if (L.startsWith('over')) b.o = 1 / p; else if (L.startsWith('under')) b.u = 1 / p;
     } else {
@@ -268,6 +259,172 @@ async function telegram(env, text, replyTo, chat) {
 }
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+const API = 'https://v3.football.api-sports.io';
+
+// --- API-Football data layer ----------------------------------------------------------------------
+// API-Football replies are turned into the Sportmonks shapes the pattern code was written for
+// (participants, scores, state, currentperiod, events, statistics, lineups, trends), so match(),
+// timeline(), statsOf(), pressure(), slipOutcome() and teamCheck() are unchanged.
+async function af(env, path, params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const r = await fetch(`${API}${path}${q ? '?' + q : ''}`, { headers: { 'x-apisports-key': env.APIFOOTBALL_KEY } });
+  if (!r.ok) throw new Error(`API-Football ${r.status} ${path}`);
+  const j = await r.json();
+  const errs = j.errors && (Array.isArray(j.errors) ? j.errors : Object.values(j.errors));
+  if (errs && errs.length) throw new Error(`API-Football ${path}: ${errs.join('; ')}`);
+  return j.response || [];
+}
+// Several fixtures in one call (at most 20 ids): includes events, line-ups and statistics.
+async function afMany(env, ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 20) out.push(...await af(env, '/fixtures', { ids: ids.slice(i, i + 20).join('-') }));
+  return out;
+}
+
+const STATE = { '1H': 'INPLAY_1ST_HALF', HT: 'HT', '2H': 'INPLAY_2ND_HALF', ET: 'INPLAY_ET', BT: 'EXTRA_TIME_BREAK', P: 'INPLAY_PENALTIES',
+  FT: 'FT', AET: 'AET', PEN: 'FT_PEN', SUSP: 'SUSPENDED', INT: 'INTERRUPTED', PST: 'POSTPONED', CANC: 'CANCELLED', ABD: 'ABANDONED',
+  AWD: 'AWARDED', WO: 'WO', NS: 'NS', TBD: 'TBD', LIVE: 'INPLAY' };
+const STAT = { 'Corner Kicks': 'CORNERS', 'Total Shots': 'SHOTS_TOTAL', 'Shots on Goal': 'SHOTS_ON_TARGET' };
+// Leagues left out of the live alerts (thin or no live markets).
+const SKIP_LEAGUE = /friendl|u1[5-9]|u2[0-3]|youth|junior|women|femen|feminin|frauen|reserve|primavera/i;
+
+// Goal events in order with the score after each ("result"), so timeline() reads them like Sportmonks.
+// Own goals: API-Football's team on an own goal is checked both ways; the reading that ends at the
+// current score is kept. A goal cancelled by VAR drops that team's latest goal before it.
+function goalEvents(x) {
+  const homeId = x.teams.home.id;
+  let ev = (x.events || []).map((e, i) => ({ e, i, min: (e.time && e.time.elapsed) || 0, ex: (e.time && e.time.extra) || 0 }))
+    .sort((a, b) => (a.min - b.min) || (a.ex - b.ex) || (a.i - b.i));
+  const goalsList = [];
+  for (const { e, min, ex } of ev) {
+    const type = String(e.type || '').toLowerCase(), det = String(e.detail || '').toLowerCase();
+    if (type === 'goal' && !/missed/.test(det)) goalsList.push({ min, ex, team: e.team && e.team.id, own: /own/.test(det), pen: /penalty/.test(det) });
+    else if (type === 'var' && /goal (cancel|disallow)/.test(det)) {
+      for (let k = goalsList.length - 1; k >= 0; k--) if (goalsList[k].team === (e.team && e.team.id) || goalsList[k].own) { goalsList.splice(k, 1); break; }
+    }
+  }
+  const cur = [x.goals.home || 0, x.goals.away || 0];
+  for (const flip of [false, true]) {
+    let h = 0, a = 0;
+    const out = goalsList.map(g => {
+      const homeGoal = (g.team === homeId) !== (g.own && flip);
+      homeGoal ? h++ : a++;
+      return { type_id: g.own ? 15 : g.pen ? 16 : 14, minute: g.min, extra_minute: g.ex || null, participant_id: g.team, result: `${h}-${a}` };
+    });
+    if (h === cur[0] && a === cur[1]) return out;
+  }
+  return goalsList.map(g => ({ type_id: g.own ? 15 : g.pen ? 16 : 14, minute: g.min, extra_minute: g.ex || null, participant_id: g.team }));
+}
+
+function toSM(x, trends) {
+  const st = x.fixture.status || {}, short = st.short;
+  const H = x.teams.home, A = x.teams.away;
+  const scores = [];
+  const add = (desc, s) => { if (s && s.home != null && s.away != null) scores.push({ description: desc, score: { participant: 'home', goals: s.home } }, { description: desc, score: { participant: 'away', goals: s.away } }); };
+  add('CURRENT', x.goals);
+  if (short !== '1H') add('1ST_HALF', x.score && x.score.halftime);
+  if (/^(FT|AET|PEN)$/.test(short)) add('2ND_HALF', x.score && x.score.fulltime);
+  const stats = [];
+  for (const t of x.statistics || []) {
+    const loc = t.team && t.team.id === H.id ? 'home' : 'away';
+    for (const s of t.statistics || []) if (STAT[s.type]) stats.push({ type: { developer_name: STAT[s.type] }, location: loc, data: { value: Number(s.value) || 0 } });
+  }
+  const cards = (x.events || []).filter(e => String(e.type).toLowerCase() === 'card' && /red|second yellow/i.test(e.detail || ''))
+    .map(e => ({ type_id: /second/i.test(e.detail) ? 21 : 20, minute: e.time && e.time.elapsed, participant_id: e.team && e.team.id }));
+  const lineups = [];
+  for (const t of x.lineups || []) for (const p of t.startXI || []) if (p.player) lineups.push({ type_id: 11, team_id: t.team && t.team.id, player_id: p.player.id, player_name: p.player.name });
+  return {
+    id: x.fixture.id, starting_at_timestamp: x.fixture.timestamp,
+    league: { name: `${x.league.country && x.league.country !== 'World' ? x.league.country + ' – ' : ''}${x.league.name}` },
+    league_id: x.league.id, season_id: `${x.league.id}-${x.league.season}`,
+    participants: [{ id: H.id, name: H.name, meta: { location: 'home' } }, { id: A.id, name: A.name, meta: { location: 'away' } }],
+    state: { developer_name: STATE[short] || short || '' },
+    currentperiod: short === '1H' ? { type_id: 1, minutes: st.elapsed } : short === '2H' ? { type_id: 2, minutes: st.elapsed } : null,
+    scores, statistics: stats, lineups, trends: trends || [],
+    events: x.events ? [...goalEvents(x), ...cards] : undefined,
+  };
+}
+
+// Live over/under prices for one match, in the row shape overPrices() reads. API-Football's in-play
+// odds come from one feed (no bookmaker per price); the bet names are sorted into full-match and
+// 1st-half total goals here (team totals and other markets are left out).
+const LIVE_FULL = /^(over\/under line|over\/under|match goals|total goals|goals over\/under|asian total|total)$/i;
+const LIVE_HALF = /^((1st|first) half[\s-]*(goals|over\/under|total|total goals|goal line|asian total|over\/under line)|(over\/under|goals over\/under|total goals|over\/under line|asian total) ?[-(]?\s*(1st|first) half\)?)$/i;
+async function liveOdds(env, fid) {
+  const r = (await af(env, '/odds/live', { fixture: fid }))[0];
+  if (!r) return { rows: [], names: [] };
+  const off = r.status && (r.status.stopped || r.status.blocked || r.status.finished);
+  const rows = [];
+  for (const bet of r.odds || []) {
+    const name = String(bet.name || '').trim();
+    const md = LIVE_FULL.test(name) ? 'Match Goals' : LIVE_HALF.test(name) ? '1st Half Goals' : null;
+    if (!md) continue;
+    for (const v of bet.values || []) {
+      const m = /^(over|under)\s*([\d.]+)?$/i.exec(String(v.value || '').trim());
+      if (!m) continue;
+      rows.push({ market_description: md, label: m[1], total: v.handicap != null && v.handicap !== '' ? v.handicap : m[2], value: Number(v.odd),
+        bookmaker_id: 'live', stopped: !!off, suspended: !!v.suspended, main: v.main });
+    }
+  }
+  return { rows, names: (r.odds || []).map(b => `${b.id}:${b.name}`) };
+}
+
+// Pre-match odds of one match as rows { bookmaker_id, market_id, label, total, value } (1X2 = bet 1,
+// goals over/under = bet 5).
+async function prematchRows(env, fid) {
+  const r = (await af(env, '/odds', { fixture: fid }))[0];
+  const rows = [];
+  for (const b of (r && r.bookmakers) || []) for (const bet of b.bets || []) {
+    if (bet.id !== 1 && bet.id !== 5) continue;
+    for (const v of bet.values || []) {
+      const m = /^(over|under)\s+([\d.]+)$/i.exec(String(v.value));
+      rows.push({ bookmaker_id: b.id, market_id: bet.id, label: m ? m[1] : v.value, total: m ? m[2] : null, value: Number(v.odd) });
+    }
+  }
+  return rows;
+}
+
+// Last-10-minute pressure needs per-minute counts, which API-Football doesn't send: every few minutes
+// the statistics of matches that could soon fit a pattern are saved (meta ps:<fixture>), and turned
+// into "trends" rows for pressure().
+const WATCH_EVERY_MIN = 3;
+const watchable = f => {
+  const c = clock(f), s = goals(f, 'CURRENT');
+  if (!c || !s) return false;
+  const tot = s[0] + s[1], lead = Math.abs(s[0] - s[1]);
+  return (c.period === 1 && c.minute >= 15 && c.minute <= 34 && tot >= 1 && tot <= 2 && lead >= 1)
+    || (c.period === 2 && c.minute >= 58 && c.minute <= 78 && lead >= 1 && lead <= 2);
+};
+function snapOf(f) {
+  const s = statsOf(f), c = clock(f);
+  return { m: c ? c.minute + (c.period === 2 && c.minute < 45 ? 45 : 0) : null, shots: s.shots, corners: s.corners, onTarget: s.onTarget };
+}
+async function watchStats(env, liveList) {
+  const ids = liveList.filter(watchable).map(f => f.id).slice(0, 60);
+  if (!ids.length) return 0;
+  const full = await afMany(env, ids);
+  const old = await inTable(env, 'meta', 'k', full.map(x => `ps:${x.fixture.id}`), true);
+  const now = Math.floor(Date.now() / 1000);
+  for (const x of full) {
+    const f = toSM(x), snap = snapOf(f);
+    if (snap.m == null || !snap.shots) continue;
+    const k = `ps:${x.fixture.id}`, prev = old.get(k) ? JSON.parse(old.get(k)) : { pts: [] };
+    if (!prev.pts.some(p => p.m === snap.m)) prev.pts.push(snap);
+    await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(k, JSON.stringify({ at: now, pts: prev.pts.slice(-20) })).run();
+  }
+  return full.length;
+}
+const TREND_ID = { corners: 34, shots: 42, onTarget: 86 };
+function trendsFrom(pts, f) {
+  const H = side(f, 'home').id, A = side(f, 'away').id, out = [];
+  for (const p of pts || []) for (const [k, id] of Object.entries(TREND_ID)) {
+    if (!p[k]) continue;
+    out.push({ type_id: id, participant_id: H, minute: p.m, value: Number(p[k].home) || 0 }, { type_id: id, participant_id: A, minute: p.m, value: Number(p[k].away) || 0 });
+  }
+  return out;
+}
+
+
 async function setup(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS triggers (
     id TEXT PRIMARY KEY, fid INTEGER, pattern TEXT, at INTEGER, minute INTEGER, score TEXT, league TEXT,
@@ -280,20 +437,7 @@ async function setup(env) {
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS slipres (pid TEXT PRIMARY KEY, fid INTEGER, at INTEGER, hit INTEGER, result TEXT, sent INTEGER)').run();
 }
 
-async function bookNames(env) {
-  const row = await env.DB.prepare("SELECT v FROM meta WHERE k = 'books'").first();
-  if (row && Date.now() - JSON.parse(row.v).at < 7 * 86400e3) return JSON.parse(row.v).books;
-  const books = {};
-  let page = 1;
-  for (let i = 0; i < 20; i++) {
-    const j = await sm(env, '/odds/bookmakers', { per_page: 50, page });
-    for (const b of j.data || []) books[b.id] = b.name;
-    if (!j.pagination || !j.pagination.has_more) break;
-    page++;
-  }
-  await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('books', ?)").bind(JSON.stringify({ at: Date.now(), books })).run();
-  return books;
-}
+async function bookNames() { return { live: 'live' }; } // API-Football's in-play odds: one feed, no bookmaker names
 
 // Could this live match be in one of the patterns? (score + minute only; cheap)
 function maybe(f) {
@@ -313,30 +457,34 @@ async function inTable(env, table, col, keys, withValue) {
   return withValue ? new Map(rows.map(r => [r[col], r.v])) : new Set(rows.map(r => r[col]));
 }
 
-// One check of all live matches. To stay light (it runs 3 times a minute), the live list is fetched
-// with scores and clock only; team names, league and goal events are fetched only for matches that
-// could be in a pattern, once per score (cached in the meta table as tl:<fixture>:<score>).
-async function scan(env) {
+// One check of all live matches: one call for the whole live list (scores, clock and goal events);
+// a match that could be in a pattern without events in the list is fetched once per score (cached
+// in the meta table as tl:<fixture>:<score>).
+async function scan(env, watch) {
   const now = Math.floor(Date.now() / 1000);
-  const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod;state' });
-  let graded = 0;
-  try { graded = await liveSettle(env, j.data || []); } catch { /* graded later by settle() */ }
-  const pre = (j.data || []).filter(maybe);
+  const raw = (await af(env, '/fixtures', { live: 'all' })).filter(x => !SKIP_LEAGUE.test((x.league && x.league.name) || ''));
+  const list = raw.map(x => toSM(x));
+  let graded = 0, watched = 0;
+  try { graded = await liveSettle(env, list); } catch { /* graded later by settle() */ }
+  if (watch) { try { watched = await watchStats(env, list); } catch { /* no snapshot this time */ } }
+  const pre = list.filter(maybe);
   const tkey = f => { const s = goals(f, 'CURRENT'); return `tl:${f.id}:${s[0]}-${s[1]}`; };
-  const cache = await inTable(env, 'meta', 'k', pre.map(tkey), true);
+  const need = pre.filter(f => !f.events);
+  const cache = await inTable(env, 'meta', 'k', need.map(tkey), true);
+  const miss = need.filter(f => !cache.get(tkey(f)));
+  if (miss.length) {
+    try {
+      for (const x of await afMany(env, miss.map(f => f.id))) {
+        const f = toSM(x), d = { at: now, events: f.events || [] };
+        cache.set(tkey(f), JSON.stringify(d));
+        await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(tkey(f), JSON.stringify(d)).run();
+      }
+    } catch { /* tried again next check */ }
+  }
   const live = [];
   for (const f of pre) {
-    let d = cache.get(tkey(f)) && JSON.parse(cache.get(tkey(f)));
-    if (!d) {
-      try {
-        const x = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;events;league' })).data || {};
-        d = { at: now, participants: (x.participants || []).map(p => ({ id: p.id, name: p.name, meta: p.meta })),
-          events: (x.events || []).filter(e => [14, 15, 16].includes(e.type_id)).map(e => ({ type_id: e.type_id, minute: e.minute, extra_minute: e.extra_minute, result: e.result, participant_id: e.participant_id, rescinded: e.rescinded, sort_order: e.sort_order })),
-          league: x.league ? { name: x.league.name } : null };
-        await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(tkey(f), JSON.stringify(d)).run();
-      } catch { continue; }
-    }
-    const full = { ...f, participants: d.participants, events: d.events, league: d.league };
+    let full = f;
+    if (!f.events) { const d = cache.get(tkey(f)) && JSON.parse(cache.get(tkey(f))); if (!d) continue; full = { ...f, events: d.events }; }
     const m = match(full);
     if (m) live.push({ f: full, m });
   }
@@ -363,11 +511,21 @@ async function scan(env) {
     // later test whether "scoring teams" matter for the 2-0 and late-lead alerts too (Marios, 13 Nov).
     if (!m.info.pm) { try { m.info.pm = await prematch(env, f.id); } catch { m.info.pm = null; } }
     books = books || await bookNames(env);
-    let d = f;
-    try { d = (await sm(env, `/football/fixtures/${f.id}`, { include: 'participants;scores;statistics.type;inplayOdds;events;trends' })).data || f; } catch { /* log without odds */ }
+    // Statistics now (one call) + the saved snapshots (last-10-minute pressure), and the live prices.
+    let d = f, odds = [];
+    try {
+      const stx = await af(env, '/fixtures/statistics', { fixture: f.id });
+      const ps = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(`ps:${f.id}`).first();
+      const pts = ps ? JSON.parse(ps.v).pts : [];
+      const withStats = { ...f, statistics: toSM({ fixture: { id: f.id, status: {} }, league: {}, teams: { home: side(f, 'home'), away: side(f, 'away') }, goals: {}, statistics: stx }).statistics };
+      const nowPt = snapOf({ ...withStats, currentperiod: f.currentperiod });
+      if (nowPt.m == null) nowPt.m = m.c.minute;
+      d = { ...withStats, trends: trendsFrom([...pts.filter(p => p.m < nowPt.m), nowPt], f) };
+    } catch { /* log without stats */ }
+    try { odds = (await liveOdds(env, f.id)).rows; } catch { /* log without odds */ }
     let P = PATTERNS[m.key];
     const line = P.line || m.s[0] + m.s[1] + 0.5;
-    const prices = overPrices(d.inplayodds || d.inplayOdds, line, P.half, books);
+    const prices = overPrices(odds, line, P.half, books);
     const best = prices[0] || null;
     const pin = prices.find(x => /pinnacle/i.test(x.book)), b365 = prices.find(x => /bet365/i.test(x.book));
     const st = statsOf(d), reds = redCards(d), p10 = pressure(d, m.c.minute);
@@ -419,7 +577,7 @@ async function scan(env) {
       logged++;
     }
   }
-  return { live: (j.data || []).length, maybe: pre.length, candidates: live.length, logged, alerts, graded };
+  return { live: list.length, maybe: pre.length, candidates: live.length, logged, alerts, graded, watched };
 }
 
 async function logTrigger(env, { id, f, m, now, sc, lg, H, A, line, best, prices, st, reds, p10, held }, sent) {
@@ -467,8 +625,7 @@ async function settle(env) {
   const open = (await env.DB.prepare('SELECT * FROM triggers WHERE hit IS NULL AND at < ? ORDER BY at LIMIT 40').bind(now - 300).all()).results || [];
   if (!open.length) return 0;
   const ids = [...new Set(open.map(t => t.fid))];
-  const j = await sm(env, `/football/fixtures/multi/${ids.join(',')}`, { include: 'scores;state' });
-  const byId = Object.fromEntries((j.data || []).map(f => [f.id, f]));
+  const byId = Object.fromEntries((await afMany(env, ids)).map(x => [x.fixture.id, toSM(x)]));
   let n = 0;
   for (const t of open) {
     const f = byId[t.fid];
@@ -500,7 +657,10 @@ async function settle(env) {
 // Warning (narrowed 17 Nov) when the top scorer doesn't start, or 3+ key players don't (regulars plus
 // the 2nd/3rd scorers). Everything is stored (table
 // `lineups`) so warned and OK picks can be compared on the results.
-const PAGES = 'https://marios9711.github.io/magic-numbers/data/sm';
+const PAGES = 'https://marios9711.github.io/magic-numbers/data/sm'; // slip.json / tgmsg.json (now from API-Football)
+// Picks logged before the move to API-Football carry Sportmonks fixture ids: never look those up here.
+const AF_SINCE = Date.parse('2026-11-26T00:00:00Z') / 1000;
+const afPick = p => (p.at || 0) >= AF_SINCE;
 const LU_TOP = 3, LU_MIN_GOALS = 3, LU_MAX_REG_MISSING = 2, LU_RECENT = 5;
 const ymd = ts => new Date(ts * 1000).toISOString().slice(0, 10);
 const dayTime = ts => new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Europe/Bucharest', weekday: 'short', hour: '2-digit', minute: '2-digit' });
@@ -516,21 +676,26 @@ async function pagesJSON(file) {
 async function seasonScorers(env, sid) {
   const k = `top:${sid}`, row = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(k).first();
   if (row) { const c = JSON.parse(row.v); if (Date.now() - c.at < 12 * 3600e3) return c.list; }
-  const list = [];
-  for (let page = 1; page <= 4; page++) {
-    const j = await sm(env, `/football/topscorers/seasons/${sid}`, { include: 'player', filters: 'seasonTopscorerTypes:208', per_page: 50, page });
-    for (const t of j.data || []) if (t.type_id == null || t.type_id === 208)
-      list.push({ pid: t.player_id, tid: t.participant_id, goals: Number(t.total) || 0, name: t.player ? (t.player.display_name || t.player.common_name || t.player.name) : `#${t.player_id}` });
-    if (!j.pagination || !j.pagination.has_more) break;
-  }
+  const [league, season] = String(sid).split('-');
+  const list = (await af(env, '/players/topscorers', { league, season })).map(r => {
+    const st = (r.statistics || [])[0] || {};
+    return { pid: r.player.id, tid: st.team && st.team.id, goals: Number(st.goals && st.goals.total) || 0, name: r.player.name };
+  });
   await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(k, JSON.stringify({ at: Date.now(), list })).run();
   return list;
 }
 
 // Regular starters from the team's last few matches with line-ups: [{ pid, name, starts, of }]
 async function regulars(env, tid, ts) {
-  const j = await sm(env, `/football/fixtures/between/${ymd(ts - 45 * 86400)}/${ymd(ts - 3600)}/${tid}`, { include: 'lineups', per_page: 50 });
-  const games = (j.data || []).map(f => ({ ts: f.starting_at_timestamp || 0, xi: (f.lineups || []).filter(l => l.type_id === 11 && l.team_id === tid) }))
+  const k = `reg:${tid}`, row = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(k).first();
+  let fx;
+  if (row && Date.now() - JSON.parse(row.v).at < 12 * 3600e3) fx = JSON.parse(row.v).fx;
+  else {
+    const recent = (await af(env, '/fixtures', { team: tid, last: LU_RECENT + 1 })).map(x => x.fixture.id);
+    fx = (await afMany(env, recent)).map(x => { const f = toSM(x); return { starting_at_timestamp: f.starting_at_timestamp, lineups: f.lineups.filter(l => l.team_id === tid) }; });
+    await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(k, JSON.stringify({ at: Date.now(), fx })).run();
+  }
+  const games = fx.map(f => ({ ts: f.starting_at_timestamp || 0, xi: (f.lineups || []).filter(l => l.type_id === 11 && l.team_id === tid) }))
     .filter(g => g.xi.length >= 11 && g.ts < ts).sort((a, b) => b.ts - a.ts).slice(0, LU_RECENT);
   if (games.length < 3) return [];
   const need = games.length === LU_RECENT ? LU_RECENT - 1 : games.length - 1, cnt = {};
@@ -579,13 +744,12 @@ async function slipResults(env) {
   const now = Math.floor(Date.now() / 1000);
   const slip = await pagesJSON('slip.json');
   if (!slip) return { picks: 0 };
-  const picks = [...(slip.slip || []), ...(slip.history || [])].filter(p => p.ts < now && p.ts > now - 2 * 86400 && p.r == null);
+  const picks = [...(slip.slip || []), ...(slip.history || [])].filter(p => afPick(p) && p.ts < now && p.ts > now - 2 * 86400 && p.r == null);
   if (!picks.length) return { picks: 0 };
   const done = await inTable(env, 'slipres', 'pid', picks.map(p => p.id));
   const todo = picks.filter(p => !done.has(p.id)).slice(0, 40);
   if (!todo.length) return { picks: picks.length, graded: 0 };
-  const j = await sm(env, `/football/fixtures/multi/${[...new Set(todo.map(p => p.fid))].join(',')}`, { include: 'scores;state;currentPeriod' });
-  const byId = Object.fromEntries((j.data || []).map(f => [f.id, f]));
+  const byId = Object.fromEntries((await afMany(env, [...new Set(todo.map(p => p.fid))])).map(x => [x.fixture.id, toSM(x)]));
   let msgs = null, graded = 0;
   for (const p of todo) {
     const f = byId[p.fid];
@@ -603,30 +767,25 @@ async function slipResults(env) {
   return { picks: picks.length, graded };
 }
 
-// --- Expected line-ups (Sportmonks add-on) and the 21:30 night check ---------------------------------
-// Night picks (kick-off 22:00–09:00 Cyprus time) get a "🌙 Night check" reply at 21:30–22:00: expected
-// line-up (type 77614 = predicted starter) checked like the official one, or, when there is no expected
-// line-up yet, only injured/suspended top scorers. Every other pick gets the same check quietly about
-// 3 hours before kick-off, so we can see over the trial how early and how well expected line-ups work.
-// Stored in D1 table `expcheck`; the line-up check later records how many predicted starters started.
-const EXP_STARTER = 77614;
+// --- The 21:30 night check ---------------------------------------------------------------------------
+// Night picks (kick-off 22:00–09:00 Cyprus time) get a "🌙 Night check" reply at 21:30–22:00: injured or
+// suspended top scorers (API-Football /injuries, "Missing Fixture"). API-Football has no expected
+// line-ups, so the quiet 3-hours-before check of the Sportmonks trial is gone. Stored in D1 table `expcheck`.
 const isNight = ts => { const h = Number(new Date(ts * 1000).toLocaleString('en-GB', { timeZone: 'Asia/Nicosia', hour: '2-digit', hour12: false })) % 24; return h >= 22 || h < 9; };
 async function expectedView(env, p) {
-  const f = (await sm(env, `/football/fixtures/${p.fid}`, { include: 'participants;expectedLineups;sidelined.sideline' })).data;
-  if (!f) return null;
+  const x = (await af(env, '/fixtures', { id: p.fid }))[0];
+  if (!x) return null;
+  const f = toSM(x);
   const H = side(f, 'home'), A = side(f, 'away'), sides = p.key === '1' ? [H] : p.key === '2' ? [A] : [H, A];
-  const exp = (f.expectedlineups || f.expectedLineups || []).filter(l => l.type_id === EXP_STARTER);
-  const hasExp = sides.every(t => exp.filter(l => l.team_id === t.id).length >= 11);
-  const out = new Set((f.sidelined || []).filter(x => !(x.sideline && x.sideline.completed === true)).map(x => (x.sideline && x.sideline.player_id) || x.player_id));
+  const out = new Set((await af(env, '/injuries', { fixture: p.fid })).filter(i => /missing/i.test(String(i.player && i.player.type))).map(i => i.player.id));
   const res = [];
   for (const t of sides) {
-    if (hasExp) { res.push(await teamCheck(env, f, t, exp)); continue; }
     let scorers = [];
     try { scorers = (await seasonScorers(env, f.season_id)).filter(x => x.tid === t.id && x.goals >= LU_MIN_GOALS).sort((a, b) => b.goals - a.goals).slice(0, LU_TOP); } catch { /* none */ }
     const miss = scorers.map((x, i) => ({ ...x, rank: i + 1 })).filter(x => out.has(x.pid));
     res.push({ team: t.name, warn: miss.length > 0, text: miss.map(x => `${short(x.name)} (${x.rank === 1 ? 'top scorer, ' : ''}${x.goals} goals, injured/suspended)`).join(', '), injuriesOnly: true });
   }
-  return { hasExp, expN: exp.length, res, expIds: exp.map(l => l.player_id) };
+  return { hasExp: false, expN: 0, res, expIds: [] };
 }
 async function expectedChecks(env) {
   const now = Math.floor(Date.now() / 1000);
@@ -634,10 +793,9 @@ async function expectedChecks(env) {
   const nightWindow = hm >= '21:30' && hm <= '21:59';
   const slip = await pagesJSON('slip.json');
   if (!slip) return null;
-  const all = [...(slip.slip || []), ...(slip.history || [])].filter(p => p.ts > now);
+  const all = [...(slip.slip || []), ...(slip.history || [])].filter(p => afPick(p) && p.ts > now);
   const night = nightWindow ? all.filter(p => isNight(p.ts) && p.ts < now + 12 * 3600).map(p => ({ p, kind: 'night' })) : [];
-  const pre = all.filter(p => !isNight(p.ts) && p.ts > now + 150 * 60 && p.ts < now + 210 * 60).map(p => ({ p, kind: 'pre' }));
-  const cand = [...night, ...pre];
+  const cand = night;
   if (!cand.length) return null;
   const done = await inTable(env, 'expcheck', 'id', cand.map(x => `${x.p.id}:${x.kind}`));
   const next = cand.find(x => !done.has(`${x.p.id}:${x.kind}`));
@@ -652,7 +810,7 @@ async function expectedChecks(env) {
     const lines = [`🌙 <b>Night check</b> · ${esc(p.hn)} – ${esc(p.an)} · ${dayTime(p.ts)}`,
       warn ? `⚠️ ${pk}` : `✅ ${pk} — ${v.hasExp ? 'expected line-up looks fine' : 'no key scorer injured or suspended'}`,
       ...v.res.filter(r => r.warn).map(r => `${esc(r.team)} without ${esc(r.text)}`),
-      v.hasExp ? '<i>Based on the expected line-up; the official one comes about 1 hour before kick-off.</i>' : '<i>No expected line-up yet: injuries and suspensions only.</i>'];
+      v.hasExp ? '<i>Based on the expected line-up; the official one comes about 1 hour before kick-off.</i>' : '<i>Injuries and suspensions only; the line-up check follows about 30–60 minutes before kick-off.</i>'];
     const msgs = await pagesJSON('tgmsg.json') || {};
     sent = await telegram(env, lines.join('\n'), msgs[p.id]).catch(() => false) ? 1 : 0;
   }
@@ -666,7 +824,7 @@ async function lineupCheck(env) {
   const now = Math.floor(Date.now() / 1000);
   const slip = await pagesJSON('slip.json');
   if (!slip) return { picks: 0 };
-  const picks = [...(slip.slip || []), ...(slip.history || [])].filter(p => p.ts > now - 15 * 60 && p.ts < now + 90 * 60);
+  const picks = [...(slip.slip || []), ...(slip.history || [])].filter(p => afPick(p) && p.ts > now - 15 * 60 && p.ts < now + 90 * 60);
   if (!picks.length) return { picks: 0 };
   const done = await inTable(env, 'lineups', 'pid', picks.map(p => p.id));
   const todo = picks.filter(p => !done.has(p.id)).sort((a, b) => a.ts - b.ts);
@@ -674,7 +832,7 @@ async function lineupCheck(env) {
   for (const p of todo) {
     if (checked) break;
     let f;
-    try { f = (await sm(env, `/football/fixtures/${p.fid}`, { include: 'participants;lineups' })).data; } catch { continue; }
+    try { const x = (await af(env, '/fixtures', { id: p.fid }))[0]; f = x && toSM(x); } catch { continue; }
     if (!f) continue;
     const xi = (f.lineups || []).filter(l => l.type_id === 11), H = side(f, 'home'), A = side(f, 'away');
     const full = t => xi.filter(l => l.team_id === t.id).length >= 11;
@@ -710,77 +868,55 @@ async function lineupCheck(env) {
   return { picks: picks.length, checked, waiting };
 }
 
-// --- /probe: shows the shape of the data the logger relies on (live match + an upcoming pick) ----------
+// --- /probe: shows the shape of the API-Football data the logger relies on --------------------------
 async function probe(env, fidParam) {
   const out = {};
-  const keys = o => (o && typeof o === 'object' ? Object.keys(o).slice(0, 25) : o);
-  const count = (arr, f) => (arr || []).reduce((m, x) => { const k = f(x); m[k] = (m[k] || 0) + 1; return m; }, {});
-  // 1) a live match
   try {
-    const j = await sm(env, '/football/livescores/inplay', { include: 'scores;currentPeriod' });
-    const live = j.data || [];
-    out.liveCount = live.length;
-    const f0 = live.find(f => clock(f)) || live[0];
-    if (f0) {
-      out.liveClock = clock(f0); out.liveScore = goals(f0, 'CURRENT');
-      const d = (await sm(env, `/football/fixtures/${f0.id}`, { include: 'participants;scores;statistics.type;inplayOdds;events;trends;league' })).data || {};
-      const s = goals(d, 'CURRENT');
-      out.live = {
-        id: d.id, league: d.league && d.league.name, teams: (d.participants || []).map(p => `${p.name} (${p.meta && p.meta.location})`),
-        scores: (d.scores || []).map(x => `${x.description}:${x.score && x.score.participant}=${x.score && x.score.goals}`),
-        eventTypes: count(d.events, e => e.type_id), eventSample: (d.events || []).slice(0, 3).map(e => ({ type_id: e.type_id, minute: e.minute, extra: e.extra_minute, result: e.result, participant_id: e.participant_id, rescinded: e.rescinded })),
-        timeline: timeline(d, s), reds: redCards(d),
-        trendTypes: count(d.trends, t => t.type_id), trendSample: (d.trends || []).slice(-3).map(t => ({ ...t })), trendKeys: keys((d.trends || [])[0]),
-        pressure: pressure(d, (clock(d) || {}).minute || 0),
-        statsTypes: (d.statistics || []).slice(0, 40).map(x => x.type && (x.type.developer_name || x.type.code)).filter(Boolean),
-        stats: statsOf(d),
-        inplayOddsN: (d.inplayodds || d.inplayOdds || []).length, inplayKeys: keys((d.inplayodds || d.inplayOdds || [])[0]),
-        inplayMarkets: count(d.inplayodds || d.inplayOdds, o => o.market_description || (o.market && o.market.name) || o.market_id),
-        inplaySample: (d.inplayodds || d.inplayOdds || []).filter(o => /goal/i.test(String(o.market_description || ''))).slice(0, 6)
-          .map(o => ({ market: o.market_description, label: o.label, name: o.name, total: o.total, value: o.value, book: o.bookmaker_id, stopped: o.stopped, suspended: o.suspended })),
-      };
-      if (s) {
-        const books = await bookNames(env);
-        out.live.overFull = overPrices(d.inplayodds || d.inplayOdds, s[0] + s[1] + 0.5, false, books).slice(0, 4);
-        out.live.overHalf = overPrices(d.inplayodds || d.inplayOdds, s[0] + s[1] + 0.5, true, books).slice(0, 4);
-      }
+    const raw = await af(env, '/fixtures', { live: 'all' });
+    out.liveCount = raw.length;
+    out.liveWithEvents = raw.filter(x => Array.isArray(x.events)).length;
+    const x0 = raw.find(x => x.fixture.status.short === '2H' && (x.goals.home + x.goals.away) > 0) || raw.find(x => x.fixture.status.short === '1H') || raw[0];
+    if (x0) {
+      const f = toSM(x0), s = goals(f, 'CURRENT');
+      out.live = { id: f.id, league: f.league.name, status: x0.fixture.status, teams: f.participants.map(p => p.name), clock: clock(f), score: s,
+        eventSample: (x0.events || []).slice(0, 4), timeline: timeline(f, s), reds: redCards(f) };
+      try { const stx = await af(env, '/fixtures/statistics', { fixture: f.id }); out.live.statTypes = ((stx[0] || {}).statistics || []).map(z => z.type); out.live.stats = statsOf(toSM({ ...x0, statistics: stx })); } catch (e) { out.live.statsError = e.message; }
+      try {
+        const lo = await liveOdds(env, f.id);
+        out.live.liveBetNames = lo.names;
+        out.live.liveRows = lo.rows.length;
+        if (s) { out.live.overFull = overPrices(lo.rows, s[0] + s[1] + 0.5, false, { live: 'live' }).slice(0, 3); out.live.overHalf = overPrices(lo.rows, s[0] + s[1] + 0.5, true, { live: 'live' }).slice(0, 3); }
+        const r0 = (await af(env, '/odds/live', { fixture: f.id }))[0];
+        out.live.liveSample = r0 ? (r0.odds || []).filter(b => /goal|over|total/i.test(b.name)).slice(0, 4).map(b => ({ id: b.id, name: b.name, values: (b.values || []).slice(0, 4) })) : null;
+        out.live.liveStatus = r0 && r0.status;
+      } catch (e) { out.live.oddsError = e.message; }
+      try { out.live.prematch = await prematch(env, f.id); } catch (e) { out.live.prematchError = e.message; }
     }
   } catch (e) { out.liveError = e.message; }
-  // 2) an upcoming match (from the slip page's value board unless ?fid= is given): injuries, scorers, recent line-ups
   try {
     let fid = fidParam ? Number(fidParam) : null;
-    if (!fid) { const sl = await pagesJSON('slip.json'); const v = sl && (sl.slip[0] || sl.value[0]); fid = v && v.fid; }
+    if (!fid) { const sl = await pagesJSON('slip.json'); const v = sl && ((sl.slip || [])[0] || (sl.value || [])[0]); fid = v && v.fid; }
     if (fid) {
-      const f = (await sm(env, `/football/fixtures/${fid}`, { include: 'participants;lineups;sidelined.sideline;league' })).data || {};
-      const H = side(f, 'home');
-      out.upcoming = {
-        id: f.id, league: f.league && f.league.name, season: f.season_id, start: f.starting_at_timestamp,
-        teams: (f.participants || []).map(p => `${p.id} ${p.name} (${p.meta && p.meta.location})`),
-        lineupsN: (f.lineups || []).length, sidelinedN: (f.sidelined || []).length,
-        sidelinedSample: (f.sidelined || []).slice(0, 3).map(x => ({ keys: keys(x), sideline: x.sideline && { player_id: x.sideline.player_id, category: x.sideline.category, completed: x.sideline.completed, team_id: x.sideline.team_id } })),
-      };
+      const x = (await af(env, '/fixtures', { id: fid }))[0];
+      const f = toSM(x), H = side(f, 'home');
+      out.upcoming = { id: f.id, league: f.league.name, season: f.season_id, start: f.starting_at_timestamp, teams: f.participants.map(p => p.name), lineupsN: f.lineups.length };
+      out.upcoming.injuries = (await af(env, '/injuries', { fixture: fid })).slice(0, 5).map(i => ({ team: i.team && i.team.name, player: i.player && i.player.name, type: i.player && i.player.type, reason: i.player && i.player.reason }));
       const top = await seasonScorers(env, f.season_id);
       out.upcoming.scorersN = top.length;
-      out.upcoming.scorersHome = top.filter(x => x.tid === H.id).sort((a, b) => b.goals - a.goals).slice(0, 3);
-      const regs = await regulars(env, H.id, f.starting_at_timestamp || Math.floor(Date.now() / 1000));
-      out.upcoming.regularsHome = regs.map(r => `${r.name} ${r.starts}/${r.of}`);
-      const j = await sm(env, `/football/fixtures/between/${ymd(Math.floor(Date.now() / 1000) - 30 * 86400)}/${ymd(Math.floor(Date.now() / 1000))}/${H.id}`, { include: 'lineups', per_page: 50 });
-      const g = (j.data || []).find(x => (x.lineups || []).length);
-      out.upcoming.recentLineupTypes = g ? count(g.lineups, l => l.type_id) : null;
-      out.upcoming.recentLineupSample = g ? g.lineups.slice(0, 2).map(l => ({ player_id: l.player_id, team_id: l.team_id, type_id: l.type_id, player_name: l.player_name, position_id: l.position_id })) : null;
-      if ((f.lineups || []).filter(l => l.type_id === 11).length >= 22) out.upcoming.check = await teamCheck(env, f, H, f.lineups.filter(l => l.type_id === 11));
+      out.upcoming.scorersHome = top.filter(z => z.tid === H.id).slice(0, 3);
+      out.upcoming.regularsHome = (await regulars(env, H.id, f.starting_at_timestamp)).map(r => `${r.name} ${r.starts}/${r.of}`);
     }
   } catch (e) { out.upcomingError = e.message; }
   return out;
 }
 
 // --- Starting the daily slip job on time ---------------------------------------------------------------
-// GitHub's own schedule often starts hours late, so the logger starts the "Daily slip (Sportmonks)"
+// GitHub's own schedule often starts hours late, so the logger starts the "Daily slip (API-Football)"
 // workflow itself at 07:07, 13:07, 18:07 and 23:07 Bucharest time. Needs the secret GH_TOKEN: a
 // fine-grained GitHub token for this repository only, with "Actions: read and write".
 const SLIP_TIMES = ['07:07', '13:07', '18:07', '23:07'];
 async function startSlipJob(env) {
-  const r = await fetch('https://api.github.com/repos/marios9711/magic-numbers/actions/workflows/sportmonks.yml/dispatches', {
+  const r = await fetch('https://api.github.com/repos/marios9711/magic-numbers/actions/workflows/apifootball.yml/dispatches', {
     method: 'POST', body: JSON.stringify({ ref: 'main' }),
     headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'magic-numbers-live' },
   });
@@ -799,21 +935,22 @@ async function dispatchSlip(env) {
   return startSlipJob(env);
 }
 
-// Each cron run (once a minute) checks 3 times: at 0, 20 and 40 seconds.
-const CHECKS_PER_RUN = 3, CHECK_EVERY_MS = 20000;
+// Each cron run (once a minute) checks twice: at 0 and 30 seconds.
+// API-Football Pro: 7,500 calls a day. Two checks a minute (one call each) = 2,880 a day.
+const CHECKS_PER_RUN = 2, CHECK_EVERY_MS = 30000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
-  if (!env.SPORTMONKS_KEY) return { skipped: 'no SPORTMONKS_KEY' };
+  if (!env.APIFOOTBALL_KEY) return { skipped: 'no APIFOOTBALL_KEY' };
   await setup(env);
   const t0 = Date.now(), out = { checks: 0, live: 0, maybe: 0, candidates: 0, logged: 0, alerts: 0, errors: 0 };
   try { const d = await dispatchSlip(env); if (d) out.dispatch = d; } catch (e) { out.dispatch = { error: e.message }; }
   for (let i = 0; i < checks; i++) {
     if (i) { const wait = t0 + i * every - Date.now(); if (wait > 0) await sleep(wait); }
     try {
-      const r = await scan(env);
+      const r = await scan(env, i === 0 && new Date(t0).getUTCMinutes() % WATCH_EVERY_MIN === 0);
       out.checks++; out.live = r.live; out.maybe = Math.max(out.maybe, r.maybe);
-      out.candidates += r.candidates; out.logged += r.logged; out.alerts += r.alerts; out.graded = (out.graded || 0) + (r.graded || 0);
+      out.candidates += r.candidates; out.watched = (out.watched || 0) + (r.watched || 0); out.logged += r.logged; out.alerts += r.alerts; out.graded = (out.graded || 0) + (r.graded || 0);
     } catch (e) { out.errors++; out.error = e.message; }
   }
   if (new Date(t0).getUTCMinutes() % 2 === 0) {
@@ -826,7 +963,7 @@ async function run(env, checks = CHECKS_PER_RUN, every = CHECK_EVERY_MS) {
   }
   if (new Date(t0).getUTCMinutes() % 10 === 0) {
     // forget cached goal timelines older than 6 hours
-    await env.DB.prepare("DELETE FROM meta WHERE k LIKE 'tl:%' AND json_extract(v, '$.at') < ?").bind(Math.floor(t0 / 1000) - 6 * 3600).run();
+    await env.DB.prepare("DELETE FROM meta WHERE (k LIKE 'tl:%' OR k LIKE 'ps:%') AND json_extract(v, '$.at') < ?").bind(Math.floor(t0 / 1000) - 6 * 3600).run();
   }
   await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('last', ?)").bind(JSON.stringify({ at: new Date().toISOString(), ...out })).run();
   return out;
@@ -905,7 +1042,7 @@ export default {
         await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('dispatchTest', ?)").bind(String(Date.now())).run();
         return new Response(JSON.stringify(await startSlipJob(env)), { headers });
       }
-      if (url.pathname === '/probe') { // one-off data check: what Sportmonks sends back (at most every 5 minutes)
+      if (url.pathname === '/probe') { // one-off data check: what API-Football sends back (at most every 5 minutes)
         const t = await env.DB.prepare("SELECT v FROM meta WHERE k = 'probe'").first();
         if (t && Date.now() - Number(t.v) < 300e3) return new Response(JSON.stringify({ ok: false, error: 'probe already run in the last 5 minutes' }), { headers });
         await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('probe', ?)").bind(String(Date.now())).run();
@@ -916,7 +1053,7 @@ export default {
         if (t && Date.now() - Number(t.v) < 600e3) return new Response(JSON.stringify({ ok: false, error: 'test already sent in the last 10 minutes' }), { headers });
         await env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('test', ?)").bind(String(Date.now())).run();
         const sent = await telegram(env, '✅ <b>Magic Numbers</b> live logger is connected. Live alerts and the daily slip will arrive here.').catch(() => false);
-        return new Response(JSON.stringify({ ok: true, sent, sportmonksKey: !!env.SPORTMONKS_KEY, telegram: !!(env.TG_TOKEN && env.TG_CHAT) }), { headers });
+        return new Response(JSON.stringify({ ok: true, sent, apiFootballKey: !!env.APIFOOTBALL_KEY, telegram: !!(env.TG_TOKEN && env.TG_CHAT) }), { headers });
       }
       const last = await env.DB.prepare("SELECT v FROM meta WHERE k = 'last'").first();
       const disp = await env.DB.prepare("SELECT v FROM meta WHERE k = 'dispatch'").first();
@@ -925,4 +1062,4 @@ export default {
   },
 };
 
-export { match, timeline, overPrices, statsOf, run, summary, lineupCheck, pressure, redCards, probe, slipResults, expectedChecks };
+export { match, timeline, overPrices, statsOf, run, scan, toSM, summary, lineupCheck, pressure, redCards, probe, slipResults, expectedChecks };
